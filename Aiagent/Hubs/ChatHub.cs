@@ -1,6 +1,7 @@
 ﻿using Aiagent.Models;
 using Aiagent.Services;
 using Microsoft.AspNetCore.SignalR;
+using System.Collections.Concurrent;
 
 namespace Aiagent.Hubs;
 
@@ -8,6 +9,12 @@ public class ChatHub : Hub
 {
     private readonly ChatCoordinator _coordinator;
     private readonly ILogger<ChatHub> _logger;
+
+    // ✅ اصلاح: قفل per-connection تا پیام‌های پشت سر هم یک کاربر
+    // به‌صورت هم‌زمان وارد جریان استریم نشوند (قبل از این، اگر کاربر
+    // پیام دوم را قبل از پایان استریم اول می‌فرستاد، دو حلقه‌ی خواندن
+    // از کانال با هم قاطی می‌شدند).
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConnectionLocks = new();
 
     public ChatHub(ChatCoordinator coordinator, ILogger<ChatHub> logger)
     {
@@ -25,6 +32,9 @@ public class ChatHub : Hub
 
         userMessage = userMessage.Trim();
         var connectionId = Context.ConnectionId;
+
+        var gate = ConnectionLocks.GetOrAdd(connectionId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(Context.ConnectionAborted);
 
         try
         {
@@ -52,7 +62,7 @@ public class ChatHub : Hub
                 return;
             }
 
-            // ✅ خواندن توکن‌ها از کانال (کانال جدید در SubmitFollowUpAsync ساخته شده)
+            // ✅ خواندن توکن‌ها از کانال
             try
             {
                 await foreach (var token in state.TokenChannel.Reader.ReadAllAsync(Context.ConnectionAborted))
@@ -79,11 +89,17 @@ public class ChatHub : Hub
                 catch { }
             }
         }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _coordinator.RemoveConversation(Context.ConnectionId);
+        if (ConnectionLocks.TryRemove(Context.ConnectionId, out var gate))
+            gate.Dispose();
         await base.OnDisconnectedAsync(exception);
     }
 }

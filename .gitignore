@@ -361,3 +361,4 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/Aiagent/Models/gemma-3-4b-it-Q4_K_M.gguf

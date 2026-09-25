@@ -20,7 +20,7 @@ public class ChatCoordinator : BackgroundService
     private readonly ConcurrentDictionary<string, ConversationState> _conversations = new();
     private readonly ConcurrentDictionary<string, StreamingTokenDecoder> _decoders = new();
 
-    private const int MaxTokensPerResponse = 1024;
+    private int MaxTokensPerResponse { get; }
 
     private const string DefaultSystemPrompt =
         "You are a helpful AI assistant. " +
@@ -37,21 +37,34 @@ public class ChatCoordinator : BackgroundService
 
         var gpuLayerCount = llm.GetValue("GpuLayerCount", 99);
         var contextSize = llm.GetValue("ContextSize", 4096u);
-        var seqMax = llm.GetValue("SeqMax", 8u);
+        var seqMax = llm.GetValue("SeqMax", 16u);
         var batchSize = llm.GetValue("BatchSize", 512u);
         var uBatchSize = llm.GetValue("UBatchSize", 512u);
         var flashAttention = llm.GetValue("FlashAttention", true);
-        var threads = llm.GetValue("Threads", Math.Max(1, Environment.ProcessorCount - 2));
+        var mainGpu = llm.GetValue("MainGpu", 0);
+
+        // ✅ اصلاح: وقتی مدل روی GPU آفلود می‌شود، llama.cpp فقط برای
+        // لایه‌های CPU (در صورت وجود) و پردازش اولیه از تردها استفاده می‌کند.
+        // مقدار بالا (مثل ProcessorCount-2) باعث می‌شود تردها در حالت
+        // spin-wait منتظر GPU بمانند و CPU را ۱۰۰٪ اشغال کنند.
+        var threads = llm.GetValue("Threads",
+            Math.Min(8, Math.Max(2, Environment.ProcessorCount / 2)));
+
+        MaxTokensPerResponse = llm.GetValue("MaxTokensPerResponse", 1024);
 
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Model file not found: {modelPath}");
 
         _logger.LogInformation("📂 در حال بارگذاری مدل: {ModelPath}", modelPath);
+        _logger.LogInformation(
+            "⚙️ GPU Layers={GpuLayers} | Context={Context} | SeqMax={SeqMax} | Batch={Batch}/{UBatch} | Threads={Threads} | FA={FlashAttention}",
+            gpuLayerCount, contextSize, seqMax, batchSize, uBatchSize, threads, flashAttention);
 
         var parameters = new ModelParams(modelPath)
         {
             ContextSize = contextSize,
             GpuLayerCount = gpuLayerCount,
+            MainGpu = mainGpu,
             BatchSize = batchSize,
             UBatchSize = uBatchSize,
             SeqMax = seqMax,
@@ -63,6 +76,8 @@ public class ChatCoordinator : BackgroundService
         _executor = new BatchedExecutor(_model, parameters);
 
         _logger.LogInformation("✅ مدل بارگذاری شد.");
+        // با فعال بودن NativeLogging در Program.cs، خروجی llama.cpp شامل خط
+        // "offloaded XX/YY layers to GPU" است — حتماً چک کنید XX == YY باشد.
     }
 
     // =====================================================
@@ -138,7 +153,13 @@ public class ChatCoordinator : BackgroundService
             if (!_conversations.TryGetValue(connectionId, out var state))
                 return;
 
+            // ✅ اصلاح: کانال قبلی را می‌بندیم تا خواننده‌ی قدیمی
+            // (حلقه‌ی await foreach در ChatHub) گیر نکند و استریم قبلی
+            // تمیز بسته شود. قبلاً کانال بدون Complete جایگزین می‌شد
+            // و در سناریوی پیام پشت سر هم، دو استریم با هم قاطی می‌شدند.
+            state.TokenChannel.Writer.TryComplete();
             state.TokenChannel = Channel.CreateUnbounded<string>();
+
             state.IsCompleted = false;
             state.IsWaitingForPrompt = false;
             state.GeneratedTokens = 0;
@@ -160,8 +181,8 @@ public class ChatCoordinator : BackgroundService
     {
         if (_conversations.TryRemove(connectionId, out var state))
         {
-            try { state.Conversation.Dispose(); } catch { }
             try { state.TokenChannel.Writer.TryComplete(); } catch { }
+            try { state.Conversation.Dispose(); } catch { }
             _decoders.TryRemove(connectionId, out _);
         }
     }
@@ -197,6 +218,11 @@ public class ChatCoordinator : BackgroundService
                     continue;
                 }
 
+                // ✅ اصلاح: فقط وقتی واقعاً کاری انجام نشد صبر می‌کنیم.
+                // قبلاً در هر چرخه (حتی با کار فعال) Task.Delay(5) اجرا می‌شد
+                // و GPU بین هر بچ ۵ میلی‌ثانیه گرسنه می‌ماند.
+                bool didWork = false;
+
                 await _executorLock.WaitAsync(stoppingToken);
 
                 try
@@ -225,6 +251,7 @@ public class ChatCoordinator : BackgroundService
                             continue;
                         }
 
+                        didWork = true;
                         telemetryTokens++;
                     }
 
@@ -247,16 +274,11 @@ public class ChatCoordinator : BackgroundService
                         bool isEog = token.IsEndOfGeneration(vocab);
                         bool isLimit = state.GeneratedTokens >= MaxTokensPerResponse;
 
-                        // ✅ توکن را (حتی EOG را) به KV برمی‌گردانیم
-                        // تا مدل مرز نوبت را ببیند.
+                        // توکن را (حتی EOG را) به KV برمی‌گردانیم
                         state.Conversation.Prompt(token);
 
                         if (isEog || isLimit)
                         {
-                            // IsCompleted را ست می‌کنیم اما Infer بعدی
-                            // هنوز باید یک بار برای این مکالمه اجرا شود
-                            // تا توکن EOG مصرف شود. این کار خودکار توسط
-                            // شرط anyRequiresInference در بالا انجام می‌شود.
                             state.IsCompleted = true;
                             state.IsWaitingForPrompt = true;
                             state.TokenChannel.Writer.TryComplete();
@@ -283,6 +305,8 @@ public class ChatCoordinator : BackgroundService
 
                         if (!string.IsNullOrEmpty(text))
                             state.TokenChannel.Writer.TryWrite(text);
+
+                        didWork = true;
                     }
                 }
                 finally
@@ -305,7 +329,9 @@ public class ChatCoordinator : BackgroundService
                     lastTelemetry = now;
                 }
 
-                await Task.Delay(5, stoppingToken);
+                // ✅ اصلاح: تأخیر فقط در حالت بیکاری
+                if (!didWork)
+                    await Task.Delay(10, stoppingToken);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -351,12 +377,6 @@ public static class GemmaPromptFormatter
 {
     /// <summary>
     /// نوبت اول: شامل system prompt و user message
-    /// فرمت خروجی:
-    ///   <start_of_turn>user
-    ///   {system}
-    ///   
-    ///   {user}<end_of_turn>
-    ///   <start_of_turn>model
     /// </summary>
     public static string FormatFirstTurn(string userMessage, string? systemPrompt = null)
     {
