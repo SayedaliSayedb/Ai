@@ -1,0 +1,195 @@
+﻿@{
+    ViewData["Title"] = "خانه - هوش مصنوعی";
+}
+
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12 text-center mb-4">
+            <h1 class="display-4">🤖 سامانه هوش مصنوعی</h1>
+            <p class="lead">لطفاً یکی از گزینه‌های زیر را انتخاب کنید:</p>
+        </div>
+    </div>
+
+    <div class="row row-cols-1 row-cols-md-2 g-4">
+        <!-- کارت اول: تحلیل تصویر (همان فرم قبلی) -->
+        <div class="col">
+            <div class="card h-100 shadow-lg">
+                <div class="card-header bg-primary text-white text-center">
+                    <h3>🖼️ تحلیل تصویر</h3>
+                </div>
+                <div class="card-body">
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="imageFile" class="form-label">تصویر خود را انتخاب کنید:</label>
+                            <input type="file" class="form-control" id="imageFile" name="file" accept=".jpg,.jpeg,.png,.gif" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="analysisMode" class="form-label">نوع تحلیل:</label>
+                            <select class="form-select" id="analysisMode" name="mode">
+                                <option value="0">توصیف دقیق</option>
+                                <option value="1">تشخیص اشیاء</option>
+                                <option value="2">تشخیص متن (OCR)</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100" id="uploadBtn">
+                            <span id="btnText">🚀 شروع تحلیل</span>
+                            <span id="btnSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                        </button>
+                    </form>
+
+                    <div id="resultContainer" class="mt-4 d-none">
+                        <div class="alert alert-info" id="statusMessage">در حال پردازش...</div>
+                        <div id="resultContent" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- کارت دوم: پرسش متنی -->
+        <div class="col">
+            <div class="card h-100 shadow-lg">
+                <div class="card-header bg-success text-white text-center">
+                    <h3>💬 پرسش متنی</h3>
+                </div>
+                <div class="card-body d-flex flex-column justify-content-center align-items-center">
+                    <p class="text-center">
+                        از هوش مصنوعی سوالات خود را بپرسید و پاسخ‌های هوشمندانه دریافت کنید.
+                    </p>
+                    <a href="/home/chat" class="btn btn-success btn-lg mt-3">
+                        🚀 ورود به بخش پرسش و پاسخ
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // کد جاوااسکریپت مربوط به تحلیل تصویر (همان کد قبلی)
+        let taskId = null;
+        let pollingInterval = null;
+
+        document.getElementById('uploadForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            const fileInput = document.getElementById('imageFile');
+            const modeSelect = document.getElementById('analysisMode');
+            const btn = document.getElementById('uploadBtn');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('btnSpinner');
+
+            if (fileInput.files.length === 0) {
+                alert('لطفاً یک تصویر انتخاب کنید.');
+                return;
+            }
+
+            btn.disabled = true;
+            btnText.textContent = 'در حال آپلود...';
+            spinner.classList.remove('d-none');
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('mode', modeSelect.value);
+
+            try {
+                const response = await fetch('/upload-image', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'خطا در آپلود تصویر');
+                }
+
+                const data = await response.json();
+                taskId = data.taskId;
+
+                document.getElementById('resultContainer').classList.remove('d-none');
+                document.getElementById('statusMessage').textContent = '⏳ تصویر با موفقیت آپلود شد. در حال تحلیل...';
+                document.getElementById('statusMessage').className = 'alert alert-warning';
+                document.getElementById('resultContent').innerHTML = '';
+
+                startPolling(taskId);
+
+                btnText.textContent = '✅ تصویر آپلود شد';
+                spinner.classList.add('d-none');
+
+            } catch (error) {
+                alert('خطا: ' + error.message);
+                btn.disabled = false;
+                btnText.textContent = '🚀 شروع تحلیل';
+                spinner.classList.add('d-none');
+            }
+        });
+
+        function startPolling(id) {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/task-status/${id}`);
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            clearInterval(pollingInterval);
+                            document.getElementById('statusMessage').textContent = '❌ تسک پیدا نشد.';
+                            document.getElementById('statusMessage').className = 'alert alert-danger';
+                        }
+                        return;
+                    }
+
+                    const data = await response.json();
+                    const statusMessage = document.getElementById('statusMessage');
+                    const resultContent = document.getElementById('resultContent');
+
+                    switch (data.status) {
+                        case 0:
+                            statusMessage.textContent = '⏳ در صف انتظار...';
+                            statusMessage.className = 'alert alert-secondary';
+                            break;
+                        case 1:
+                            statusMessage.textContent = '🔄 در حال تحلیل تصویر...';
+                            statusMessage.className = 'alert alert-info';
+                            break;
+                        case 2:
+                            statusMessage.textContent = '✅ تحلیل با موفقیت انجام شد!';
+                            statusMessage.className = 'alert alert-success';
+                            clearInterval(pollingInterval);
+
+                            if (data.result) {
+                                try {
+                                    const resultObj = JSON.parse(data.result);
+                                    if (resultObj.Description) {
+                                        resultContent.innerHTML = `<div class="card"><div class="card-body"><h5>نتیجه تحلیل:</h5><p>${resultObj.Description}</p>`;
+                                        if (resultObj.Confidence) {
+                                            resultContent.innerHTML += `<p><strong>دقت:</strong> ${(resultObj.Confidence * 100).toFixed(2)}%</p>`;
+                                        }
+                                        resultContent.innerHTML += `</div></div>`;
+                                    } else {
+                                        resultContent.innerHTML = `<pre class="bg-light p-3 rounded">${JSON.stringify(resultObj, null, 2)}</pre>`;
+                                    }
+                                } catch {
+                                    resultContent.innerHTML = `<div class="alert alert-success">${data.result}</div>`;
+                                }
+                            } else {
+                                resultContent.innerHTML = '<div class="alert alert-warning">نتیجه‌ای برای نمایش وجود ندارد.</div>';
+                            }
+
+                            document.getElementById('uploadBtn').disabled = false;
+                            document.getElementById('btnText').textContent = '🚀 شروع تحلیل جدید';
+                            break;
+                        case 3:
+                            statusMessage.textContent = '❌ خطا در تحلیل تصویر';
+                            statusMessage.className = 'alert alert-danger';
+                            clearInterval(pollingInterval);
+                            resultContent.innerHTML = `<div class="alert alert-danger">${data.errorMessage || 'خطای ناشناخته رخ داده است.'}</div>`;
+                            document.getElementById('uploadBtn').disabled = false;
+                            document.getElementById('btnText').textContent = '🚀 شروع تحلیل';
+                            break;
+                    }
+                } catch (error) {
+                    console.error('خطا در دریافت وضعیت:', error);
+                }
+            }, 2000);
+        }
+    </script>
+}
