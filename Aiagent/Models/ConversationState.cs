@@ -13,4 +13,9 @@ public class ConversationState
     public int GeneratedTokens { get; set; }
     public DateTime LastActivity { get; set; } = DateTime.UtcNow;
     public string? SystemPrompt { get; set; }
+
+    // === فیلدهای جدید برای محاسبه‌ی TTFT و TPOT ===
+    public DateTime? PromptSubmittedAt { get; set; }
+    public DateTime? FirstTokenAt { get; set; }
+    public DateTime? LastTokenAt { get; set; }
 }

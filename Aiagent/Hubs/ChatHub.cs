@@ -9,11 +9,6 @@ public class ChatHub : Hub
 {
     private readonly ChatCoordinator _coordinator;
     private readonly ILogger<ChatHub> _logger;
-
-    // ✅ اصلاح: قفل per-connection تا پیام‌های پشت سر هم یک کاربر
-    // به‌صورت هم‌زمان وارد جریان استریم نشوند (قبل از این، اگر کاربر
-    // پیام دوم را قبل از پایان استریم اول می‌فرستاد، دو حلقه‌ی خواندن
-    // از کانال با هم قاطی می‌شدند).
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConnectionLocks = new();
 
     public ChatHub(ChatCoordinator coordinator, ILogger<ChatHub> logger)

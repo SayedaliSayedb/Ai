@@ -1,4 +1,5 @@
 ﻿using Aiagent.Models;
+using Aiagent.Services.Metrics;
 using LLama;
 using LLama.Batched;
 using LLama.Common;
@@ -13,6 +14,7 @@ namespace Aiagent.Services;
 public class ChatCoordinator : BackgroundService
 {
     private readonly ILogger<ChatCoordinator> _logger;
+    private readonly IMetricsCollector _metrics;
     private readonly LLamaWeights _model;
     private readonly BatchedExecutor _executor;
     private readonly SemaphoreSlim _executorLock = new(1, 1);
@@ -21,6 +23,7 @@ public class ChatCoordinator : BackgroundService
     private readonly ConcurrentDictionary<string, StreamingTokenDecoder> _decoders = new();
 
     private int MaxTokensPerResponse { get; }
+    private uint SeqMax { get; }   // ← فیلد اضافه شد
 
     private const string DefaultSystemPrompt =
         "You are a helpful AI assistant. " +
@@ -28,25 +31,24 @@ public class ChatCoordinator : BackgroundService
         "When the user asks for code, write it in a fenced code block. " +
         "For normal greetings and questions, reply with plain text only.";
 
-    public ChatCoordinator(ILogger<ChatCoordinator> logger, IConfiguration config)
+    public ChatCoordinator(
+        ILogger<ChatCoordinator> logger,
+        IConfiguration config,
+        IMetricsCollector metrics)   // ← پارامتر جدید
     {
         _logger = logger;
+        _metrics = metrics;
 
         var llm = config.GetSection("Llm");
         var modelPath = llm["ModelPath"] ?? "models/gemma-3-4b-it-Q4_K_M.gguf";
 
         var gpuLayerCount = llm.GetValue("GpuLayerCount", 99);
         var contextSize = llm.GetValue("ContextSize", 4096u);
-        var seqMax = llm.GetValue("SeqMax", 16u);
+        SeqMax = llm.GetValue("SeqMax", 16u);   // ← ذخیره در فیلد
         var batchSize = llm.GetValue("BatchSize", 512u);
         var uBatchSize = llm.GetValue("UBatchSize", 512u);
         var flashAttention = llm.GetValue("FlashAttention", true);
         var mainGpu = llm.GetValue("MainGpu", 0);
-
-        // ✅ اصلاح: وقتی مدل روی GPU آفلود می‌شود، llama.cpp فقط برای
-        // لایه‌های CPU (در صورت وجود) و پردازش اولیه از تردها استفاده می‌کند.
-        // مقدار بالا (مثل ProcessorCount-2) باعث می‌شود تردها در حالت
-        // spin-wait منتظر GPU بمانند و CPU را ۱۰۰٪ اشغال کنند.
         var threads = llm.GetValue("Threads",
             Math.Min(8, Math.Max(2, Environment.ProcessorCount / 2)));
 
@@ -58,7 +60,7 @@ public class ChatCoordinator : BackgroundService
         _logger.LogInformation("📂 در حال بارگذاری مدل: {ModelPath}", modelPath);
         _logger.LogInformation(
             "⚙️ GPU Layers={GpuLayers} | Context={Context} | SeqMax={SeqMax} | Batch={Batch}/{UBatch} | Threads={Threads} | FA={FlashAttention}",
-            gpuLayerCount, contextSize, seqMax, batchSize, uBatchSize, threads, flashAttention);
+            gpuLayerCount, contextSize, SeqMax, batchSize, uBatchSize, threads, flashAttention);
 
         var parameters = new ModelParams(modelPath)
         {
@@ -67,7 +69,7 @@ public class ChatCoordinator : BackgroundService
             MainGpu = mainGpu,
             BatchSize = batchSize,
             UBatchSize = uBatchSize,
-            SeqMax = seqMax,
+            SeqMax = SeqMax,
             Threads = (int)threads,
             FlashAttention = flashAttention
         };
@@ -76,14 +78,30 @@ public class ChatCoordinator : BackgroundService
         _executor = new BatchedExecutor(_model, parameters);
 
         _logger.LogInformation("✅ مدل بارگذاری شد.");
-        // با فعال بودن NativeLogging در Program.cs، خروجی llama.cpp شامل خط
-        // "offloaded XX/YY layers to GPU" است — حتماً چک کنید XX == YY باشد.
+    }
+
+    // =====================================================
+    // APIهای عمومی برای Metrics
+    // =====================================================
+    public int GetActiveConversationCount() => _conversations.Count;
+
+    public int GetActiveSequenceCount()
+        => _conversations.Values.Count(c => !c.IsCompleted);
+
+    public int GetMaxSequences() => (int)SeqMax;
+
+    public int GetQueuedCount()
+        => _conversations.Values.Count(c => c.IsWaitingForPrompt && !c.IsCompleted);
+
+    public double GetKvCacheUsagePercent()
+    {
+        var active = GetActiveSequenceCount();
+        return SeqMax == 0 ? 0.0 : (double)active / SeqMax * 100.0;
     }
 
     // =====================================================
     // کمکی‌ها برای ChatHub
     // =====================================================
-
     public bool HasConversation(string connectionId)
         => _conversations.ContainsKey(connectionId);
 
@@ -125,7 +143,8 @@ public class ChatCoordinator : BackgroundService
                 IsWaitingForPrompt = false,
                 GeneratedTokens = 0,
                 LastActivity = DateTime.UtcNow,
-                TokenChannel = Channel.CreateUnbounded<string>()
+                TokenChannel = Channel.CreateUnbounded<string>(),
+                PromptSubmittedAt = DateTime.UtcNow   // ← ثبت زمان شروع
             };
 
             _conversations.TryAdd(connectionId, newState);
@@ -153,10 +172,6 @@ public class ChatCoordinator : BackgroundService
             if (!_conversations.TryGetValue(connectionId, out var state))
                 return;
 
-            // ✅ اصلاح: کانال قبلی را می‌بندیم تا خواننده‌ی قدیمی
-            // (حلقه‌ی await foreach در ChatHub) گیر نکند و استریم قبلی
-            // تمیز بسته شود. قبلاً کانال بدون Complete جایگزین می‌شد
-            // و در سناریوی پیام پشت سر هم، دو استریم با هم قاطی می‌شدند.
             state.TokenChannel.Writer.TryComplete();
             state.TokenChannel = Channel.CreateUnbounded<string>();
 
@@ -164,6 +179,9 @@ public class ChatCoordinator : BackgroundService
             state.IsWaitingForPrompt = false;
             state.GeneratedTokens = 0;
             state.LastActivity = DateTime.UtcNow;
+            state.PromptSubmittedAt = DateTime.UtcNow;   // ← ریست زمان
+            state.FirstTokenAt = null;
+            state.LastTokenAt = null;
             _decoders.TryRemove(connectionId, out _);
 
             var formatted = GemmaPromptFormatter.FormatFollowUpTurn(userMessage);
@@ -218,9 +236,6 @@ public class ChatCoordinator : BackgroundService
                     continue;
                 }
 
-                // ✅ اصلاح: فقط وقتی واقعاً کاری انجام نشد صبر می‌کنیم.
-                // قبلاً در هر چرخه (حتی با کار فعال) Task.Delay(5) اجرا می‌شد
-                // و GPU بین هر بچ ۵ میلی‌ثانیه گرسنه می‌ماند.
                 bool didWork = false;
 
                 await _executorLock.WaitAsync(stoppingToken);
@@ -228,8 +243,7 @@ public class ChatCoordinator : BackgroundService
                 try
                 {
                     // ============================================
-                    // مرحله ۱: Infer — شامل مکالمات completed
-                    // که هنوز EOG شان پردازش نشده (RequiresInference)
+                    // مرحله ۱: Infer
                     // ============================================
                     bool anyRequiresInference = _conversations.Values
                         .Any(c => c.Conversation.RequiresInference);
@@ -241,6 +255,7 @@ public class ChatCoordinator : BackgroundService
                         if (result == DecodeResult.NoKvSlot)
                         {
                             _logger.LogWarning("⚠️ KV cache پر شده است.");
+                            _metrics.RecordNoKvSlot();
                             CleanupInactive(TimeSpan.FromMinutes(5));
                             continue;
                         }
@@ -253,10 +268,11 @@ public class ChatCoordinator : BackgroundService
 
                         didWork = true;
                         telemetryTokens++;
+                        _metrics.RecordBatch();
                     }
 
                     // ============================================
-                    // مرحله ۲: Sample — فقط مکالمات فعال
+                    // مرحله ۲: Sample
                     // ============================================
                     foreach (var kvp in _conversations.ToArray())
                     {
@@ -267,14 +283,33 @@ public class ChatCoordinator : BackgroundService
                         if (!state.Conversation.RequiresSampling) continue;
 
                         var token = state.Conversation.Sample(sampler);
+                        var now = DateTime.UtcNow;
+
+                        // --- ثبت TTFT در اولین توکن ---
+                        if (state.FirstTokenAt == null &&
+                            state.PromptSubmittedAt.HasValue)
+                        {
+                            state.FirstTokenAt = now;
+                            var ttftMs = (now - state.PromptSubmittedAt.Value)
+                                .TotalMilliseconds;
+                            _metrics.RecordTtft(ttftMs);
+                        }
+
+                        // --- ثبت TPOT بین توکن‌های بعدی ---
+                        if (state.LastTokenAt.HasValue)
+                        {
+                            var tpotMs = (now - state.LastTokenAt.Value)
+                                .TotalMilliseconds;
+                            _metrics.RecordTpot(tpotMs);
+                        }
+                        state.LastTokenAt = now;
 
                         state.GeneratedTokens++;
-                        state.LastActivity = DateTime.UtcNow;
+                        state.LastActivity = now;
 
                         bool isEog = token.IsEndOfGeneration(vocab);
                         bool isLimit = state.GeneratedTokens >= MaxTokensPerResponse;
 
-                        // توکن را (حتی EOG را) به KV برمی‌گردانیم
                         state.Conversation.Prompt(token);
 
                         if (isEog || isLimit)
@@ -304,7 +339,10 @@ public class ChatCoordinator : BackgroundService
                         var text = CleanChunk(decoder.Read());
 
                         if (!string.IsNullOrEmpty(text))
+                        {
                             state.TokenChannel.Writer.TryWrite(text);
+                            _metrics.RecordTokens(1);
+                        }
 
                         didWork = true;
                     }
@@ -315,8 +353,8 @@ public class ChatCoordinator : BackgroundService
                 }
 
                 // تله‌متری
-                var now = DateTime.UtcNow;
-                if ((now - lastTelemetry).TotalSeconds >= 5)
+                var nowTele = DateTime.UtcNow;
+                if ((nowTele - lastTelemetry).TotalSeconds >= 5)
                 {
                     var activeSeqs = _conversations.Values
                         .Count(c => !c.IsCompleted && c.Conversation.RequiresInference);
@@ -326,10 +364,9 @@ public class ChatCoordinator : BackgroundService
                         activeSeqs, telemetryTokens / 5, (int)(telemetryTokens * 1.3 / 5));
 
                     telemetryTokens = 0;
-                    lastTelemetry = now;
+                    lastTelemetry = nowTele;
                 }
 
-                // ✅ اصلاح: تأخیر فقط در حالت بیکاری
                 if (!didWork)
                     await Task.Delay(10, stoppingToken);
             }
@@ -375,36 +412,28 @@ public class ChatCoordinator : BackgroundService
 // =====================================================
 public static class GemmaPromptFormatter
 {
-    /// <summary>
-    /// نوبت اول: شامل system prompt و user message
-    /// </summary>
     public static string FormatFirstTurn(string userMessage, string? systemPrompt = null)
     {
         var sb = new System.Text.StringBuilder();
-
         sb.Append("<start_of_turn>user\n");
-
         if (!string.IsNullOrWhiteSpace(systemPrompt))
         {
             sb.Append(systemPrompt);
             sb.Append("\n\n");
         }
-
         sb.Append(userMessage);
         sb.Append("<end_of_turn>\n");
         sb.Append("<start_of_turn>model\n");
-
         return sb.ToString();
     }
+
     public static string FormatFollowUpTurn(string userMessage)
     {
         var sb = new System.Text.StringBuilder();
-
         sb.Append("<start_of_turn>user\n");
         sb.Append(userMessage);
         sb.Append("<end_of_turn>\n");
         sb.Append("<start_of_turn>model\n");
-
         return sb.ToString();
     }
 }

@@ -4,24 +4,102 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.103.4" />
+    <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="LLamaSharp" Version="0.27.0" />
     <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
     <PackageReference Include="LLamaSharp.Backend.Cuda12.Windows" Version="0.27.0" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.12" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="11.0.0-preview.7.26381.103" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.29.0" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="Parquet.Net" Version="6.1.1-pre.1" />
   </ItemGroup>
-<ItemGroup>
-<None Update="models\synset.txt">
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  </None>
-</ItemGroup>
-<ItemGroup>
-  <Folder Include="_storage\" />
-</ItemGroup>
+
+  <!-- کپی خودکار appsettings.json به پوشه خروجی -->
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.Development.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- کپی خودکار فایل‌های مدل و لیبل‌ها -->
+  <ItemGroup>
+    <None Update="models\gemma-3-4b-it-Q4_K_M.gguf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- ============================================================
+       کپی فایل‌های CUDA Toolkit (cudart, cublas) از پوشه lib\cuda12
+       ============================================================
+       این سه فایل جزو پکیج NuGet نیستند و باید از CUDA Toolkit
+       روی سیستم شما در پوشه lib\cuda12 در کنار فایل .csproj
+       قرار بگیرند:
+         - cudart64_12.dll
+         - cublas64_12.dll
+         - cublasLt64_12.dll
+       ============================================================ -->
+  <ItemGroup>
+    <CudaToolkitFiles Include="lib\cuda12\*.dll" />
+  </ItemGroup>
+
+  <Target Name="CopyCudaToolkitFiles" BeforeTargets="Build" Condition="'@(CudaToolkitFiles)' != ''">
+    <Copy SourceFiles="@(CudaToolkitFiles)" DestinationFolder="$(OutputPath)runtimes\win-x64\native\cuda12" SkipUnchangedFiles="false" />
+    <Message Text="✅ فایل‌های CUDA Toolkit کپی شدند: @(CudaToolkitFiles->'%(Filename)%(Extension)', ', ')" Importance="high" />
+  </Target>
+
+  <Target Name="WarnMissingCudaToolkit" BeforeTargets="Build" Condition="'@(CudaToolkitFiles)' == ''">
+    <Warning Text="⚠️ فایل‌های CUDA Toolkit در پوشه lib\cuda12\ پیدا نشدند. لطفاً cudart64_12.dll، cublas64_12.dll و cublasLt64_12.dll را در این پوشه قرار دهید." />
+  </Target>
+
+  <ItemGroup>
+    <Folder Include="_storage\" />
+  </ItemGroup>
+
+  <!-- ============================================================
+       حذف خودکار بک‌اند CPU پس از هر Build
+       ============================================================
+       پکیج LLamaSharp.Backend.Cuda12 به طور ضمنی پکیج LLamaSharp.Backend.Cpu
+       را نصب می‌کند و باعث می‌شود پوشه‌های avx, avx2, avx512 در پوشه
+       خروجی ساخته شوند. LLamaSharp ترجیح می‌دهد از این پوشه‌ها (CPU)
+       استفاده کند و هرگز به سراغ cuda12 نمی‌رود.
+
+       این Target پس از هر Build این کارها را انجام می‌دهد:
+         1. فایل ggml-cpu.dll را از پوشه avx2 (یا avx) به پوشه cuda12
+            کپی می‌کند (چون ggml-cuda.dll هنگام اجرا به آن نیاز دارد)
+         2. پوشه‌های avx, avx2, avx512 را کاملاً حذف می‌کند
+       ============================================================ -->
+  <Target Name="ForceCudaBackend" AfterTargets="Build">
+
+    <!-- مرحله ۱: کپی ggml-cpu.dll از avx2 به پوشه cuda12 -->
+    <Copy SourceFiles="$(OutputPath)runtimes\win-x64\native\avx2\ggml-cpu.dll" DestinationFolder="$(OutputPath)runtimes\win-x64\native\cuda12" Condition="Exists('$(OutputPath)runtimes\win-x64\native\avx2\ggml-cpu.dll')" ContinueOnError="true" />
+
+    <!-- اگر avx2 وجود نداشت، از avx استفاده کن -->
+    <Copy SourceFiles="$(OutputPath)runtimes\win-x64\native\avx\ggml-cpu.dll" DestinationFolder="$(OutputPath)runtimes\win-x64\native\cuda12" Condition="!Exists('$(OutputPath)runtimes\win-x64\native\avx2\ggml-cpu.dll') AND Exists('$(OutputPath)runtimes\win-x64\native\avx\ggml-cpu.dll')" ContinueOnError="true" />
+
+    <Message Text="✅ ggml-cpu.dll به پوشه cuda12 کپی شد." Condition="Exists('$(OutputPath)runtimes\win-x64\native\cuda12\ggml-cpu.dll')" Importance="high" />
+
+    <!-- مرحله ۲: حذف پوشه‌های بک‌اند CPU -->
+    <Exec Command="if exist &quot;$(OutputPath)runtimes\win-x64\native\avx&quot; rmdir /S /Q &quot;$(OutputPath)runtimes\win-x64\native\avx&quot;" ContinueOnError="true" />
+
+    <Exec Command="if exist &quot;$(OutputPath)runtimes\win-x64\native\avx2&quot; rmdir /S /Q &quot;$(OutputPath)runtimes\win-x64\native\avx2&quot;" ContinueOnError="true" />
+
+    <Exec Command="if exist &quot;$(OutputPath)runtimes\win-x64\native\avx512&quot; rmdir /S /Q &quot;$(OutputPath)runtimes\win-x64\native\avx512&quot;" ContinueOnError="true" />
+
+    <Message Text="✅ پوشه‌های بک‌اند CPU حذف شدند." Importance="high" />
+
+    <!-- مرحله ۳: بررسی وجود فایل‌های CUDA Toolkit -->
+    <Warning Text="⚠️ فایل cudart64_12.dll در پوشه cuda12 پیدا نشد. برنامه اجرا نخواهد شد." Condition="!Exists('$(OutputPath)runtimes\win-x64\native\cuda12\cudart64_12.dll')" />
+
+    <Warning Text="⚠️ فایل cublas64_12.dll در پوشه cuda12 پیدا نشد. برنامه اجرا نخواهد شد." Condition="!Exists('$(OutputPath)runtimes\win-x64\native\cuda12\cublas64_12.dll')" />
+
+    <Warning Text="⚠️ فایل cublasLt64_12.dll در پوشه cuda12 پیدا نشد. برنامه اجرا نخواهد شد." Condition="!Exists('$(OutputPath)runtimes\win-x64\native\cuda12\cublasLt64_12.dll')" />
+  </Target>
+
 </Project>

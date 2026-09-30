@@ -1,0 +1,148 @@
+﻿@{
+    ViewData["Title"] = "ورود به سامانه";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ورود | سامانه هوش مصنوعی</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            font-family: 'Vazirmatn', sans-serif;
+            background: linear-gradient(135deg, #0B2B31 0%, #00838F 100%);
+        }
+        .login-card {
+            background: #fff;
+            border-radius: 20px;
+            padding: 48px 40px;
+            width: min(440px, 92vw);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
+        }
+        .login-card h1 {
+            margin: 0 0 8px;
+            font-size: 22px;
+            color: #004D5A;
+            text-align: center;
+        }
+        .login-card p.subtitle {
+            margin: 0 0 32px;
+            text-align: center;
+            color: #7A959B;
+            font-size: 13px;
+        }
+        .field { margin-bottom: 20px; }
+        .field label {
+            display: block;
+            margin-bottom: 8px;
+            color: #3C5C63;
+            font-size: 13.5px;
+            font-weight: 500;
+        }
+        .field input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1.5px solid #E1EEF1;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 15px;
+            background: #F7FCFD;
+            transition: .2s;
+            direction: ltr;
+            text-align: left;
+        }
+        .field input:focus {
+            outline: none;
+            border-color: #00BCD4;
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(0, 188, 212, .12);
+        }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 16px 0 24px;
+            font-size: 13.5px;
+            color: #3C5C63;
+        }
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            border: 0;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #26C6DA, #00838F);
+            color: #fff;
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: .2s;
+            box-shadow: 0 8px 20px rgba(0, 151, 167, .3);
+        }
+        .btn-submit:hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(0, 151, 167, .4); }
+        .error {
+            background: #FFEBEE;
+            color: #B3261E;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 13.5px;
+            border: 1px solid rgba(211, 47, 47, .2);
+        }
+        .switch-link {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 13px;
+            color: #7A959B;
+        }
+        .switch-link a {
+            color: #00838F;
+            text-decoration: none;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>🔐 ورود به سامانه هوش مصنوعی</h1>
+        <p class="subtitle">برای دسترسی به داشبورد پایش، وارد شوید</p>
+
+        @if (ViewBag.Error != null)
+        {
+            <div class="error">@ViewBag.Error</div>
+        }
+
+        <form method="post" action="/login">
+            <div class="field">
+                <label for="phoneNumber">شماره موبایل</label>
+                <input type="tel" id="phoneNumber" name="phoneNumber"
+                       placeholder="09xxxxxxxxx" required pattern="09\d{9}" maxlength="11" />
+            </div>
+            <div class="field">
+                <label for="password">رمز عبور</label>
+                <input type="password" id="password" name="password"
+                       placeholder="••••••••" required minlength="6" />
+            </div>
+            <label class="checkbox-row">
+                <input type="checkbox" name="rememberMe" value="true" checked />
+                <span>مرا برای ۳۰ روز به خاطر بسپار</span>
+            </label>
+            <button type="submit" class="btn-submit">
+                <i class="fas fa-sign-in-alt"></i> ورود
+            </button>
+        </form>
+
+        <div class="switch-link">
+            حساب ندارید؟ <a href="/register">ثبت‌نام کنید</a>
+        </div>
+    </div>
+</body>
+</html>

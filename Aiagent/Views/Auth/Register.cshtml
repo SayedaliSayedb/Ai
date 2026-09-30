@@ -1,0 +1,146 @@
+﻿@{
+    ViewData["Title"] = "ثبت‌نام";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ثبت‌نام | سامانه هوش مصنوعی</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        /* مشابه Login.cshtml */
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            font-family: 'Vazirmatn',sans-serif;
+            background: linear-gradient(135deg,#0B2B31,#00838F);
+        }
+
+        .login-card {
+            background: #fff;
+            border-radius: 20px;
+            padding: 48px 40px;
+            width: min(440px,92vw);
+            box-shadow: 0 24px 60px rgba(0,0,0,.25);
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 22px;
+            color: #004D5A;
+            text-align: center;
+        }
+
+        .subtitle {
+            margin: 0 0 32px;
+            text-align: center;
+            color: #7A959B;
+            font-size: 13px;
+        }
+
+        .field {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #3C5C63;
+            font-size: 13.5px;
+            font-weight: 500;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1.5px solid #E1EEF1;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 15px;
+            background: #F7FCFD;
+            transition: .2s;
+        }
+
+            input:focus {
+                outline: none;
+                border-color: #00BCD4;
+                background: #fff;
+                box-shadow: 0 0 0 4px rgba(0,188,212,.12);
+            }
+
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            border: 0;
+            border-radius: 12px;
+            background: linear-gradient(135deg,#26C6DA,#00838F);
+            color: #fff;
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .error {
+            background: #FFEBEE;
+            color: #B3261E;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 13.5px;
+        }
+
+        .switch-link {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 13px;
+            color: #7A959B;
+        }
+
+            .switch-link a {
+                color: #00838F;
+                text-decoration: none;
+                font-weight: 600;
+            }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>📝 ثبت‌نام در سامانه</h1>
+        <p class="subtitle">حساب کاربری جدید بسازید</p>
+
+        @if (ViewBag.Error != null)
+        {
+            <div class="error">@ViewBag.Error</div>
+        }
+
+        <form method="post" action="/register">
+            <div class="field">
+                <label>شماره موبایل</label>
+                <input type="tel" name="phoneNumber" placeholder="09xxxxxxxxx"
+                       required pattern="09\d{9}" maxlength="11" />
+            </div>
+            <div class="field">
+                <label>نام نمایشی (اختیاری)</label>
+                <input type="text" name="displayName" placeholder="مثلاً: علی رضایی" />
+            </div>
+            <div class="field">
+                <label>رمز عبور (حداقل ۶ کاراکتر)</label>
+                <input type="password" name="password" required minlength="6" />
+            </div>
+            <button type="submit" class="btn-submit">
+                <i class="fas fa-user-plus"></i> ثبت‌نام
+            </button>
+        </form>
+
+        <div class="switch-link">
+            حساب دارید؟ <a href="/login">وارد شوید</a>
+        </div>
+    </div>
+</body>
+</html>

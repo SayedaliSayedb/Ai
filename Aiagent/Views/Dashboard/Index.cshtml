@@ -1,0 +1,844 @@
+﻿@{
+    ViewData["Title"] = "داشبورد پایش";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>داشبورد پایش | سامانه هوش مصنوعی</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Vazirmatn', sans-serif;
+            background: #0B2B31;
+            color: #EAFBFF;
+            min-height: 100vh;
+        }
+
+        /* ---------- Topbar ---------- */
+        .topbar {
+            background: rgba(255,255,255,.04);
+            border-bottom: 1px solid rgba(255,255,255,.08);
+            padding: 14px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            backdrop-filter: blur(10px);
+        }
+
+            .topbar h1 {
+                margin: 0;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            .topbar .actions {
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            }
+
+            .topbar a {
+                padding: 8px 16px;
+                border-radius: 10px;
+                background: rgba(0, 188, 212, .15);
+                border: 1px solid rgba(0, 188, 212, .3);
+                color: #9BE7F0;
+                text-decoration: none;
+                font-size: 13px;
+                transition: .2s;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+            }
+
+                .topbar a:hover {
+                    background: rgba(0, 188, 212, .25);
+                }
+
+        /* ---------- Container ---------- */
+        .container {
+            padding: 24px;
+            display: grid;
+            gap: 20px;
+            grid-template-columns: repeat(12, 1fr);
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* ---------- KPI Cards ---------- */
+        .kpi-card {
+            grid-column: span 3;
+            background: rgba(255,255,255,.05);
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 16px;
+            padding: 20px;
+            position: relative;
+            transition: .2s;
+        }
+
+            .kpi-card:hover {
+                background: rgba(255,255,255,.08);
+            }
+
+            .kpi-card.alert {
+                border-color: rgba(255, 82, 82, .5);
+                background: rgba(255, 82, 82, .08);
+            }
+
+            .kpi-card .label {
+                font-size: 12px;
+                color: #7A959B;
+                text-transform: uppercase;
+                letter-spacing: .5px;
+            }
+
+            .kpi-card .value {
+                font-size: 28px;
+                font-weight: 700;
+                margin: 8px 0 4px;
+                direction: ltr;
+                text-align: right;
+            }
+
+                .kpi-card .value .unit {
+                    font-size: 14px;
+                    font-weight: 400;
+                    color: #7A959B;
+                    margin-inline-start: 4px;
+                }
+
+            .kpi-card .delta {
+                font-size: 12px;
+                color: #7A959B;
+            }
+
+            .kpi-card .icon {
+                position: absolute;
+                top: 16px;
+                inset-inline-end: 16px;
+                width: 32px;
+                height: 32px;
+                border-radius: 10px;
+                display: grid;
+                place-items: center;
+                background: rgba(0, 188, 212, .15);
+                color: #26C6DA;
+            }
+
+        /* ---------- Chart Cards ---------- */
+        .chart-card {
+            grid-column: span 6;
+            background: rgba(255,255,255,.05);
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 16px;
+            padding: 20px;
+        }
+
+            .chart-card.wide {
+                grid-column: span 12;
+            }
+
+            .chart-card h3 {
+                margin: 0 0 16px;
+                font-size: 14px;
+                font-weight: 500;
+                color: #9BE7F0;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+
+            .chart-card canvas {
+                max-height: 260px;
+            }
+
+        /* ---------- SLO Badges ---------- */
+        .slo-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-inline-start: 8px;
+        }
+
+        .slo-ok {
+            background: rgba(76, 175, 80, .2);
+            color: #B9F6CA;
+        }
+
+        .slo-bad {
+            background: rgba(244, 67, 54, .2);
+            color: #FFCDD2;
+        }
+
+        /* ---------- Threshold Button ---------- */
+        .btn-threshold {
+            padding: 8px 16px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #FFB020, #F57C00);
+            border: 0;
+            color: #fff;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: .2s;
+            box-shadow: 0 4px 12px rgba(245, 124, 0, .3);
+        }
+
+            .btn-threshold:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 6px 16px rgba(245, 124, 0, .45);
+            }
+
+        /* ---------- Modal ---------- */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.7);
+            backdrop-filter: blur(6px);
+            display: none;
+            place-items: center;
+            z-index: 1000;
+        }
+
+            .modal-overlay.show {
+                display: grid;
+            }
+
+        .modal-box {
+            background: #0E353C;
+            border: 1px solid rgba(0, 188, 212, .3);
+            border-radius: 20px;
+            padding: 28px 32px;
+            width: min(560px, 92vw);
+            max-height: 88vh;
+            overflow-y: auto;
+            box-shadow: 0 30px 80px rgba(0,0,0,.5);
+        }
+
+            .modal-box h2 {
+                margin: 0 0 8px;
+                font-size: 18px;
+                color: #9BE7F0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .modal-box .hint {
+                color: #7A959B;
+                font-size: 13px;
+                margin-bottom: 22px;
+                line-height: 1.7;
+            }
+
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255,255,255,.05);
+        }
+
+            .field-row:last-of-type {
+                border-bottom: 0;
+            }
+
+            .field-row label {
+                color: #CFEFF4;
+                font-size: 13.5px;
+            }
+
+            .field-row .desc {
+                display: block;
+                color: #7A959B;
+                font-size: 11.5px;
+                margin-top: 4px;
+            }
+
+            .field-row input[type=number] {
+                width: 110px;
+                padding: 8px 12px;
+                border-radius: 10px;
+                border: 1px solid rgba(0, 188, 212, .3);
+                background: rgba(0,0,0,.25);
+                color: #fff;
+                font-family: inherit;
+                font-size: 14px;
+                text-align: center;
+                direction: ltr;
+            }
+
+            .field-row input:focus {
+                outline: none;
+                border-color: #00BCD4;
+                box-shadow: 0 0 0 3px rgba(0, 188, 212, .15);
+            }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 22px;
+            justify-content: flex-end;
+        }
+
+        .btn-cancel, .btn-save {
+            padding: 11px 24px;
+            border-radius: 12px;
+            border: 0;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: .2s;
+        }
+
+        .btn-cancel {
+            background: rgba(255,255,255,.08);
+            color: #CFEFF4;
+        }
+
+            .btn-cancel:hover {
+                background: rgba(255,255,255,.14);
+            }
+
+        .btn-save {
+            background: linear-gradient(135deg, #26C6DA, #00838F);
+            color: #fff;
+            box-shadow: 0 8px 18px rgba(0, 151, 167, .35);
+        }
+
+            .btn-save:hover {
+                transform: translateY(-1px);
+            }
+
+            .btn-save:disabled {
+                opacity: .6;
+                cursor: wait;
+            }
+
+        /* ---------- Toast ---------- */
+        .breach-toast {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translate(-50%, -100px);
+            background: linear-gradient(135deg, #E53935, #B71C1C);
+            color: #fff;
+            padding: 14px 22px;
+            border-radius: 14px;
+            font-size: 14px;
+            box-shadow: 0 12px 30px rgba(229, 57, 53, .4);
+            transition: transform .35s cubic-bezier(.22, .61, .36, 1);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: 90vw;
+        }
+
+            .breach-toast.show {
+                transform: translate(-50%, 0);
+            }
+
+        /* ---------- Responsive ---------- */
+        @@media (max-width: 900px) {
+            .kpi-card {
+                grid-column: span 6;
+            }
+
+            .chart-card {
+                grid-column: span 12;
+            }
+        }
+
+        @@media (max-width: 560px) {
+            .topbar {
+                padding: 12px 14px;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+
+                .topbar h1 {
+                    font-size: 14px;
+                }
+
+            .kpi-card {
+                grid-column: span 12;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ================= Topbar ================= -->
+    <div class="topbar">
+        <h1>📊 داشبورد پایش زنده سرویس LLM</h1>
+        <div class="actions">
+            <button id="btnThresholds" class="btn-threshold">
+                <i class="fas fa-sliders-h"></i> تنظیم آستانه‌ها
+            </button>
+            <a href="/chat"><i class="fas fa-comments"></i> چت</a>
+            <a href="/logout"><i class="fas fa-sign-out-alt"></i> خروج</a>
+        </div>
+    </div>
+
+    <!-- ================= Container ================= -->
+    <div class="container">
+
+        <!-- KPI Cards -->
+        <div class="kpi-card" id="kpiActive">
+            <div class="icon"><i class="fas fa-users"></i></div>
+            <div class="label">مکالمات فعال</div>
+            <div class="value" id="v-active">0 <span class="unit">/ <span id="v-seqmax">0</span></span></div>
+            <div class="delta">حداکثر ظرفیت: SeqMax</div>
+        </div>
+
+        <div class="kpi-card" id="kpiKv">
+            <div class="icon"><i class="fas fa-memory"></i></div>
+            <div class="label">مصرف KV Cache</div>
+            <div class="value"><span id="v-kv">0</span><span class="unit">%</span></div>
+            <div class="delta" id="v-kv-msg">حالت پایدار</div>
+        </div>
+
+        <div class="kpi-card" id="kpiTps">
+            <div class="icon"><i class="fas fa-bolt"></i></div>
+            <div class="label">توان عملیاتی</div>
+            <div class="value"><span id="v-tps">0</span><span class="unit">tok/s</span></div>
+            <div class="delta"><span id="v-bps">0</span> batch/s</div>
+        </div>
+
+        <div class="kpi-card" id="kpiGpu">
+            <div class="icon"><i class="fas fa-microchip"></i></div>
+            <div class="label">GPU</div>
+            <div class="value"><span id="v-gpu">0</span><span class="unit">%</span></div>
+            <div class="delta"><span id="v-gpumem">0</span> / <span id="v-gputotal">0</span> MB</div>
+        </div>
+
+        <!-- Latency charts -->
+        <div class="chart-card wide">
+            <h3>
+                تأخیر TTFT و TPOT (p50 / p95 / p99)
+                <span class="slo-badge slo-ok" id="slo-ttft">TTFT: OK</span>
+                <span class="slo-badge slo-ok" id="slo-tpot">TPOT: OK</span>
+            </h3>
+            <canvas id="chart-latency"></canvas>
+        </div>
+
+        <!-- Resources + Load -->
+        <div class="chart-card">
+            <h3>مصرف منابع</h3>
+            <canvas id="chart-resources"></canvas>
+        </div>
+
+        <div class="chart-card">
+            <h3>بار هم‌زمانی</h3>
+            <canvas id="chart-load"></canvas>
+        </div>
+
+        <!-- Error rate -->
+        <div class="chart-card wide">
+            <h3>نرخ خطا (NoKvSlot / Timeout)</h3>
+            <canvas id="chart-errors"></canvas>
+        </div>
+
+    </div>
+
+    <!-- ================= Modal تنظیم آستانه‌ها ================= -->
+    <div class="modal-overlay" id="thresholdModal">
+        <div class="modal-box">
+            <h2><i class="fas fa-sliders-h"></i> تنظیم آستانه‌های SLO</h2>
+            <p class="hint">
+                این مقادیر به عنوان خطوط مرجع در نمودارها رسم می‌شوند و در صورت تجاوز،
+                هشدار ثبت می‌گردد.
+            </p>
+
+            <div class="field-row">
+                <label>
+                    حداکثر p95-TTFT
+                    <span class="desc">زمان تا اولین توکن (میلی‌ثانیه)</span>
+                </label>
+                <input type="number" id="th-ttft" min="100" max="30000" step="100" />
+            </div>
+
+            <div class="field-row">
+                <label>
+                    حداکثر p95-TPOT
+                    <span class="desc">زمان به ازای هر توکن (میلی‌ثانیه)</span>
+                </label>
+                <input type="number" id="th-tpot" min="50" max="5000" step="50" />
+            </div>
+
+            <div class="field-row">
+                <label>
+                    حداکثر مصرف KV Cache
+                    <span class="desc">درصد از ظرفیت کل</span>
+                </label>
+                <input type="number" id="th-kv" min="10" max="100" step="5" />
+            </div>
+
+            <div class="field-row">
+                <label>
+                    حداکثر مصرف حافظه‌ی GPU
+                    <span class="desc">درصد</span>
+                </label>
+                <input type="number" id="th-gpumem" min="10" max="100" step="5" />
+            </div>
+
+            <div class="field-row">
+                <label>
+                    حداکثر بار GPU
+                    <span class="desc">درصد</span>
+                </label>
+                <input type="number" id="th-gpuutil" min="10" max="100" step="5" />
+            </div>
+
+            <div class="field-row">
+                <label>
+                    حداکثر نرخ خطا
+                    <span class="desc">درصد</span>
+                </label>
+                <input type="number" id="th-error" min="0.1" max="10" step="0.1" />
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn-cancel" id="btnCancelTh">انصراف</button>
+                <button class="btn-save" id="btnSaveTh">
+                    <i class="fas fa-save"></i> ذخیره
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= Toast نقض آستانه ================= -->
+    <div class="breach-toast" id="breachToast">
+        <i class="fas fa-exclamation-triangle"></i>
+        <span id="breachMessage"></span>
+    </div>
+
+    <!-- ================= SignalR + Scripts ================= -->
+    <script src="~/lib/microsoft/signalr/dist/browser/signalr.js"></script>
+    <script>
+        // ============================================================
+        // Chart Setup
+        // ============================================================
+        const MAX_POINTS = 120; // ۲ دقیقه با نمونه‌ی ۱ ثانیه‌ای
+
+        const labels = [];
+        const dataTtftP50 = [], dataTtftP95 = [], dataTtftP99 = [];
+        const dataTpotP50 = [], dataTpotP95 = [], dataTpotP99 = [];
+        const dataGpu = [], dataKv = [], dataTokens = [];
+        const dataActive = [], dataQueued = [];
+        const dataNoKv = [], dataTimeout = [];
+
+        function pushData(arr, v) {
+            arr.push(v);
+            if (arr.length > MAX_POINTS) arr.shift();
+        }
+
+        function pushLabel(t) {
+            labels.push(new Date(t).toLocaleTimeString('fa-IR'));
+            if (labels.length > MAX_POINTS) labels.shift();
+        }
+
+        const commonOptions = {
+            responsive: true,
+            animation: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: '#9BE7F0',
+                        font: { family: 'Vazirmatn', size: 11 }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: '#7A959B', font: { family: 'Vazirmatn', size: 10 } },
+                    grid: { color: 'rgba(255,255,255,.04)' }
+                },
+                y: {
+                    ticks: { color: '#7A959B', font: { family: 'Vazirmatn', size: 10 } },
+                    grid: { color: 'rgba(255,255,255,.04)' }
+                }
+            }
+        };
+
+        const chartLatency = new Chart(document.getElementById('chart-latency'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'TTFT p50', data: dataTtftP50, borderColor: '#26C6DA', backgroundColor: 'transparent', tension: .3, borderWidth: 2 },
+                    { label: 'TTFT p95', data: dataTtftP95, borderColor: '#FFB020', backgroundColor: 'transparent', tension: .3, borderWidth: 2 },
+                    { label: 'TTFT p99', data: dataTtftP99, borderColor: '#E53935', backgroundColor: 'transparent', tension: .3, borderWidth: 2, borderDash: [5, 5] },
+                    { label: 'TPOT p50', data: dataTpotP50, borderColor: '#66BB6A', backgroundColor: 'transparent', tension: .3, borderWidth: 2 },
+                    { label: 'TPOT p95', data: dataTpotP95, borderColor: '#AB47BC', backgroundColor: 'transparent', tension: .3, borderWidth: 2 },
+                ]
+            },
+            options: { ...commonOptions }
+        });
+
+        const chartResources = new Chart(document.getElementById('chart-resources'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'GPU %', data: dataGpu, borderColor: '#26C6DA', backgroundColor: 'rgba(38,198,218,.1)', fill: true, tension: .3, borderWidth: 2 },
+                    { label: 'KV Cache %', data: dataKv, borderColor: '#FFB020', backgroundColor: 'rgba(255,176,32,.1)', fill: true, tension: .3, borderWidth: 2 }
+                ]
+            },
+            options: {
+                ...commonOptions,
+                scales: {
+                    ...commonOptions.scales,
+                    y: { ...commonOptions.scales.y, max: 100, min: 0 }
+                }
+            }
+        });
+
+        const chartLoad = new Chart(document.getElementById('chart-load'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'مکالمات فعال', data: dataActive, borderColor: '#66BB6A', backgroundColor: 'rgba(102,187,106,.1)', fill: true, tension: .3, borderWidth: 2 },
+                    { label: 'در صف', data: dataQueued, borderColor: '#AB47BC', backgroundColor: 'rgba(171,71,188,.1)', fill: true, tension: .3, borderWidth: 2 }
+                ]
+            },
+            options: { ...commonOptions }
+        });
+
+        const chartErrors = new Chart(document.getElementById('chart-errors'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'NoKvSlot', data: dataNoKv, borderColor: '#E53935', backgroundColor: 'rgba(229,57,53,.1)', fill: true, tension: .3, borderWidth: 2 },
+                    { label: 'Timeout', data: dataTimeout, borderColor: '#FFB020', backgroundColor: 'rgba(255,176,32,.1)', fill: true, tension: .3, borderWidth: 2 }
+                ]
+            },
+            options: { ...commonOptions }
+        });
+
+        // ============================================================
+        // KPI Update
+        // ============================================================
+        function updateKpi(s) {
+            document.getElementById('v-active').firstChild.nodeValue = s.activeConversations + ' ';
+            document.getElementById('v-seqmax').textContent = s.maxSequences;
+            document.getElementById('v-kv').textContent = s.kvCacheUsagePercent.toFixed(1);
+            document.getElementById('v-tps').textContent = s.tokensPerSecond.toFixed(1);
+            document.getElementById('v-bps').textContent = s.batchesPerSecond.toFixed(1);
+            document.getElementById('v-gpu').textContent = s.gpuUtilizationPercent.toFixed(0);
+            document.getElementById('v-gpumem').textContent = s.gpuMemoryUsedMb.toFixed(0);
+            document.getElementById('v-gputotal').textContent = s.gpuMemoryTotalMb.toFixed(0);
+
+            // هشدار KV
+            const kvCard = document.getElementById('kpiKv');
+            const kvMsg = document.getElementById('v-kv-msg');
+            if (s.kvCacheUsagePercent > 90) {
+                kvCard.classList.add('alert');
+                kvMsg.textContent = '⚠️ نزدیک به اشباع';
+            } else if (s.kvCacheUsagePercent > 75) {
+                kvCard.classList.add('alert');
+                kvMsg.textContent = 'در حال افزایش';
+            } else {
+                kvCard.classList.remove('alert');
+                kvMsg.textContent = 'حالت پایدار';
+            }
+
+            // SLO badges (با آستانه‌ی داینامیک)
+            const ttftLimit = currentThresholds.ttftP95Max || 2000;
+            const tpotLimit = currentThresholds.tpotP95Max || 500;
+
+            const ttft = document.getElementById('slo-ttft');
+            if (s.ttftP95 > ttftLimit) {
+                ttft.className = 'slo-badge slo-bad';
+                ttft.textContent = 'TTFT: نقض SLO';
+            } else {
+                ttft.className = 'slo-badge slo-ok';
+                ttft.textContent = 'TTFT: OK';
+            }
+
+            const tpot = document.getElementById('slo-tpot');
+            if (s.tpotP95 > tpotLimit) {
+                tpot.className = 'slo-badge slo-bad';
+                tpot.textContent = 'TPOT: نقض SLO';
+            } else {
+                tpot.className = 'slo-badge slo-ok';
+                tpot.textContent = 'TPOT: OK';
+            }
+        }
+
+        // ============================================================
+        // Chart Update
+        // ============================================================
+        function updateCharts(s) {
+            pushLabel(s.timestamp);
+
+            pushData(dataTtftP50, s.ttftP50);
+            pushData(dataTtftP95, s.ttftP95);
+            pushData(dataTtftP99, s.ttftP99);
+            pushData(dataTpotP50, s.tpotP50);
+            pushData(dataTpotP95, s.tpotP95);
+            pushData(dataTpotP99, s.tpotP99);
+            pushData(dataGpu, s.gpuUtilizationPercent);
+            pushData(dataKv, s.kvCacheUsagePercent);
+            pushData(dataTokens, s.tokensPerSecond);
+            pushData(dataActive, s.activeConversations);
+            pushData(dataQueued, s.queuedRequests);
+            pushData(dataNoKv, s.noKvSlotCount);
+            pushData(dataTimeout, s.timeoutCount);
+
+            chartLatency.update('none');
+            chartResources.update('none');
+            chartLoad.update('none');
+            chartErrors.update('none');
+        }
+
+        // ============================================================
+        // SignalR Connection
+        // ============================================================
+        const conn = new signalR.HubConnectionBuilder()
+            .withUrl('/metricsHub')
+            .withAutomaticReconnect([0, 2000, 5000, 10000])
+            .build();
+
+        conn.on('MetricUpdate', (sample) => {
+            updateKpi(sample);
+            updateCharts(sample);
+        });
+
+        conn.on('ThresholdBreach', (breach) => {
+            const msg = `${breach.metricName}: ${breach.value.toFixed(1)} (حد: ${breach.threshold})`;
+            showToast(`⚠️ ${msg}`, '#E53935');
+        });
+
+        conn.start()
+            .then(() => console.log('MetricsHub connected'))
+            .catch(err => console.error('MetricsHub error:', err));
+
+        // ============================================================
+        // Threshold Modal
+        // ============================================================
+        let currentThresholds = {};
+
+        const modal = document.getElementById('thresholdModal');
+        const btnThresholds = document.getElementById('btnThresholds');
+        const btnCancelTh = document.getElementById('btnCancelTh');
+        const btnSaveTh = document.getElementById('btnSaveTh');
+
+        const inputs = {
+            ttft:    document.getElementById('th-ttft'),
+            tpot:    document.getElementById('th-tpot'),
+            kv:      document.getElementById('th-kv'),
+            gpumem:  document.getElementById('th-gpumem'),
+            gpuutil: document.getElementById('th-gpuutil'),
+            error:   document.getElementById('th-error')
+        };
+
+        async function loadThresholds() {
+            try {
+                const r = await fetch('/api/thresholds');
+                const t = await r.json();
+                currentThresholds = t;
+                inputs.ttft.value    = t.ttftP95Max;
+                inputs.tpot.value    = t.tpotP95Max;
+                inputs.kv.value      = t.kvCacheMax;
+                inputs.gpumem.value  = t.gpuMemoryMax;
+                inputs.gpuutil.value = t.gpuUtilizationMax;
+                inputs.error.value   = t.errorRateMax;
+            } catch (e) {
+                console.error('خطا در بارگذاری آستانه‌ها', e);
+            }
+        }
+
+        btnThresholds.addEventListener('click', async () => {
+            await loadThresholds();
+            modal.classList.add('show');
+        });
+
+        btnCancelTh.addEventListener('click', () => modal.classList.remove('show'));
+
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.remove('show');
+        });
+
+        btnSaveTh.addEventListener('click', async () => {
+            btnSaveTh.disabled = true;
+            try {
+                const body = {
+                    ttftP95Max:        parseFloat(inputs.ttft.value),
+                    tpotP95Max:        parseFloat(inputs.tpot.value),
+                    kvCacheMax:        parseFloat(inputs.kv.value),
+                    gpuMemoryMax:      parseFloat(inputs.gpumem.value),
+                    gpuUtilizationMax: parseFloat(inputs.gpuutil.value),
+                    errorRateMax:      parseFloat(inputs.error.value)
+                };
+                const r = await fetch('/api/thresholds', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (r.ok) {
+                    currentThresholds = body;
+                    showToast('✅ آستانه‌ها با موفقیت ذخیره شد', '#4CAF50');
+                    modal.classList.remove('show');
+                } else {
+                    showToast('❌ خطا در ذخیره‌سازی', '#E53935');
+                }
+            } catch (e) {
+                showToast('❌ خطا: ' + e.message, '#E53935');
+            } finally {
+                btnSaveTh.disabled = false;
+            }
+        });
+
+        // ============================================================
+        // Toast
+        // ============================================================
+        let toastTimer = null;
+        function showToast(message, color) {
+            const toast = document.getElementById('breachToast');
+            document.getElementById('breachMessage').textContent = message;
+            toast.style.background = `linear-gradient(135deg, ${color}, ${color}cc)`;
+            toast.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
+        }
+
+        // ============================================================
+        // Initial Load
+        // ============================================================
+        (async function init() {
+            await loadThresholds();
+
+            try {
+                const r = await fetch('/api/dashboard/snapshot');
+                const s = await r.json();
+                updateKpi(s);
+            } catch { /* ignore */ }
+        })();
+    </script>
+
+</body>
+</html>
