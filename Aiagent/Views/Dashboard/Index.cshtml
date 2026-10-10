@@ -205,7 +205,31 @@
                 transform: translateY(-1px);
                 box-shadow: 0 6px 16px rgba(245, 124, 0, .45);
             }
+        /* ---------- Load Test Button ---------- */
+        .btn-loadtest {
+            padding: 8px 16px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #AB47BC, #7B1FA2);
+            border: 0;
+            color: #fff;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: .2s;
+            box-shadow: 0 4px 12px rgba(123, 31, 162, .35);
+            text-decoration: none;
+        }
 
+            .btn-loadtest:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 6px 16px rgba(123, 31, 162, .5);
+                background: linear-gradient(135deg, #BA68C8, #8E24AA);
+                color: #fff;
+            }
         /* ---------- Modal ---------- */
         .modal-overlay {
             position: fixed;
@@ -392,6 +416,9 @@
     <div class="topbar">
         <h1>📊 داشبورد پایش زنده سرویس LLM</h1>
         <div class="actions">
+            <a href="/loadtest" class="btn-loadtest">
+                <i class="fas fa-flask"></i> آزمون بار
+            </a>
             <button id="btnThresholds" class="btn-threshold">
                 <i class="fas fa-sliders-h"></i> تنظیم آستانه‌ها
             </button>

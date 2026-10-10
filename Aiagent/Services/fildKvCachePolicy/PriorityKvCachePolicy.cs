@@ -9,7 +9,7 @@ namespace Aiagent.Services.Scheduling;
 /// فرمول اولویت:
 ///   priority = w₁·recent + w₂·is_streaming + w₃·length − w₄·rebuild_cost
 ///
-/// قاعده‌ی مطلق: مکالمه‌ی در حال استریم هرگز حذف نمی‌شود.
+/// قاعده‌ی مطلق: مکالمه‌ی «فعالانه در حال استریم» هرگز حذف نمی‌شود.
 /// </summary>
 public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
 {
@@ -54,7 +54,6 @@ public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
     {
         if (conversations.Count == 0) return null;
 
-        // اولویت‌ها را تازه کن
         UpdatePriorities(conversations);
 
         ConversationState? victim = null;
@@ -62,15 +61,13 @@ public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
 
         foreach (var c in conversations)
         {
-            // خودِ درخواست فعلی که NoKvSlot را تحریک کرده، کاندید نیست
             if (c.ConnectionId == excludeConnectionId) continue;
+            if (c.Conversation == null) continue;
 
-            // قاعده‌ی طلایی: مکالمه‌ی در حال استریم هرگز حذف نمی‌شود
-            if (IsStreaming(c)) continue;
+            // ✅ [FIX] فقط مکالماتی که «فعالانه» در حال تولیدند مقدس هستند
+            if (IsActivelyStreaming(c)) continue;
 
-            // فقط مکالماتی که قبلاً تکمیل شده‌اند یا در انتظار نوبت بعدی هستند
-            if (!c.IsCompleted && c.IsAdmitted) continue;
-
+            // هر چیز دیگری (completed، stalled، یا در صف) قابل‌کشتن است
             if (c.Priority < lowest)
             {
                 lowest = c.Priority;
@@ -82,16 +79,11 @@ public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
         {
             Interlocked.Increment(ref _totalRejections);
             _logger.LogWarning(
-                "🚫 هیچ قربانی مناسبی برای حذف پیدا نشد (exclude={Exclude}); درخواست جدید رد می‌شود.",
-                excludeConnectionId);
+                "🚫 هیچ قربانی مناسبی نبود (همه فعالانه در حال استریم)؛ صبر می‌کنیم.");
             return null;
         }
 
         Interlocked.Increment(ref _totalEvictions);
-        _logger.LogWarning(
-            "🗑️ قربانی انتخاب شد: {ConnectionId} (priority={P:F2}, wasStreaming={S}, turns={T})",
-            victim.ConnectionId, victim.Priority, IsStreaming(victim), victim.TurnCount);
-
         return victim;
     }
 
@@ -118,7 +110,8 @@ public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
         var recent = 1.0 / (1.0 + secondsSinceActivity / _options.ActivityWindowSeconds);
 
         // --- is_streaming: مطلق (عملاً veto) ---
-        var streaming = IsStreaming(c) ? 1.0 : 0.0;
+        // ⬅️ [FIX] نام متد تغییر کرد
+        var streaming = IsActivelyStreaming(c) ? 1.0 : 0.0;
 
         // --- conversation_length: نرمال‌شده بین ۰ و ۱ ---
         var length = Math.Min(1.0,
@@ -150,14 +143,16 @@ public sealed class PriorityKvCachePolicy : IKvCacheEvictionPolicy
     }
 
     /// <summary>
-    /// «در حال استریم» = در batch فعال است و پاسخ در حال تولید.
-    /// مکالمه‌ی IsCompleted && IsWaitingForPrompt در حال استریم نیست.
+    /// «در حال استریم فعال» = در 500ms اخیر توکن تولید کرده است.
+    /// این پنجره‌ی کوتاه، مکالماتی که واقعاً در حال تولیدند را محافظت می‌کند،
+    /// ولی مکالماتی که به‌دلیل NoKvSlot متوقف شده‌اند را رها می‌کند.
     /// </summary>
-    private static bool IsStreaming(ConversationState c)
+    private static bool IsActivelyStreaming(ConversationState c)
     {
         return c.IsAdmitted
             && !c.IsCompleted
             && c.Conversation != null
-            && c.GeneratedTokens > 0;   // حداقل یک توکن تولید شده
+            && c.LastTokenAt.HasValue
+            && (DateTime.UtcNow - c.LastTokenAt.Value).TotalMilliseconds < 500;
     }
 }

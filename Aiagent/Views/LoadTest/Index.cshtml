@@ -1,0 +1,550 @@
+﻿@{
+    ViewData["Title"] = "آزمون بار";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>آزمون بار | سامانه هوش مصنوعی</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --bg: #0B2B31; --panel: rgba(255,255,255,.05); --panel-2: rgba(255,255,255,.08);
+            --border: rgba(255,255,255,.10); --accent: #26C6DA; --accent-2: #00838F;
+            --text: #EAFBFF; --muted: #7A959B;
+            --ok: #4CAF50; --bad: #E53935; --warn: #FFB020;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; font-family: 'Vazirmatn', sans-serif;
+            background: var(--bg); color: var(--text); min-height: 100vh;
+            padding-bottom: 40px;
+        }
+        .topbar {
+            background: rgba(255,255,255,.04); border-bottom: 1px solid var(--border);
+            padding: 14px 28px; display: flex; align-items: center;
+            justify-content: space-between; backdrop-filter: blur(10px);
+        }
+        .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; }
+        .topbar a {
+            padding: 8px 16px; border-radius: 10px;
+            background: rgba(0,188,212,.15); border: 1px solid rgba(0,188,212,.3);
+            color: #9BE7F0; text-decoration: none; font-size: 13px;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        .grid { display: grid; gap: 20px; }
+        .card {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 16px; padding: 20px;
+        }
+        .card h3 {
+            margin: 0 0 16px; font-size: 14px; font-weight: 600; color: #9BE7F0;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .form-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px; }
+        .form-row.two { grid-template-columns: repeat(2, 1fr); }
+        label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+        input[type=number], input[type=text], textarea, select {
+            width: 100%; padding: 10px 12px; border-radius: 10px;
+            border: 1px solid var(--border); background: rgba(0,0,0,.25);
+            color: var(--text); font-family: inherit; font-size: 14px;
+            transition: .2s;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none; border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(0,188,212,.15);
+        }
+        textarea { min-height: 110px; resize: vertical; direction: ltr; text-align: left; line-height: 1.8; }
+        .toggles { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; }
+        .toggle {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 8px 14px; border-radius: 10px;
+            background: rgba(0,0,0,.2); border: 1px solid var(--border);
+            cursor: pointer; user-select: none; transition: .2s;
+            font-size: 13px;
+        }
+        .toggle input { accent-color: var(--accent); }
+        .toggle.active { background: rgba(0,188,212,.15); border-color: var(--accent); }
+        .btn {
+            padding: 12px 24px; border-radius: 12px; border: 0;
+            font-family: inherit; font-size: 14px; font-weight: 600;
+            cursor: pointer; transition: .2s; display: inline-flex;
+            align-items: center; gap: 8px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #26C6DA, #00838F); color: #fff;
+            box-shadow: 0 8px 18px rgba(0,151,167,.35);
+        }
+        .btn-primary:hover { transform: translateY(-1px); }
+        .btn-primary:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+        .btn-secondary {
+            background: rgba(255,255,255,.08); color: var(--text);
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,.14); }
+        .progress {
+            margin-top: 16px; height: 6px; background: rgba(0,0,0,.25);
+            border-radius: 3px; overflow: hidden; display: none;
+        }
+        .progress.active { display: block; }
+        .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #26C6DA, #00838F);
+            transition: width .3s ease; }
+        .summary-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;
+        }
+        .stat {
+            padding: 14px; border-radius: 12px;
+            background: rgba(0,0,0,.2); border: 1px solid var(--border);
+        }
+        .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+        .stat .val { font-size: 18px; font-weight: 700; direction: ltr; text-align: right; }
+        .stat .unit { font-size: 12px; color: var(--muted); font-weight: 400; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td {
+            padding: 10px 12px; text-align: right;
+            border-bottom: 1px solid var(--border);
+        }
+        th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+        td.num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+        tr.ok td { background: rgba(76,175,80,.05); }
+        tr.fail td { background: rgba(229,57,53,.07); }
+        .badge {
+            display: inline-block; padding: 2px 10px; border-radius: 999px;
+            font-size: 11px; font-weight: 600;
+        }
+        .badge.ok { background: rgba(76,175,80,.2); color: #B9F6CA; }
+        .badge.fail { background: rgba(229,57,53,.2); color: #FFCDD2; }
+        .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.7; }
+        #resultsSection { display: none; }
+        #resultsSection.active { display: block; }
+    </style>
+</head>
+<body>
+
+    <div class="topbar">
+        <h1>🧪 آزمون بار سرویس LLM</h1>
+        <div style="display:flex;gap:10px;">
+            <a href="/Dashboard"><i class="fas fa-chart-line"></i> داشبورد</a>
+            <a href="/chat"><i class="fas fa-comments"></i> چت</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="grid">
+
+            <!-- ====================== Control Panel ====================== -->
+            <div class="card">
+                <h3><i class="fas fa-sliders-h"></i> تنظیمات آزمون</h3>
+
+                <div class="form-row">
+                    <div>
+                        <label>تعداد کاربر هم‌زمان (Concurrency)</label>
+                        <input type="number" id="concurrency" min="1" max="64" value="4" />
+                    </div>
+                    <div>
+                        <label>تعداد درخواست هر کاربر</label>
+                        <input type="number" id="perUser" min="1" max="50" value="1" />
+                    </div>
+                    <div>
+                        <label>Timeout (ثانیه)</label>
+                        <input type="number" id="timeout" min="10" max="600" value="120" />
+                    </div>
+                </div>
+
+                <div class="form-row two">
+                    <div>
+                        <label>نام Variant (برای گزارش)</label>
+                        <input type="text" id="variant" value="baseline" />
+                    </div>
+                    <div>
+                        <label>System Prompt (اختیاری)</label>
+                        <input type="text" id="systemPrompt" placeholder="در صورت خالی، پیش‌فرض سرویس استفاده می‌شود" />
+                    </div>
+                </div>
+
+                <div>
+                    <label>پرامپت‌ها (هر خط = یک پرامپت)</label>
+                    <textarea id="prompts" placeholder="یک تابع فیبوناچی در پایتون بنویس
+تفاوت let و var در جاوااسکریپت چیست؟
+یک ایمیل رسمی برای درخواست مرخصی بنویس"></textarea>
+                    <div class="hint">💡 اگر خالی باشد، یک پرامپت پیش‌فرض استفاده می‌شود. پرامپت‌ها به‌صورت round-robin بین کاربران توزیع می‌شوند.</div>
+                </div>
+
+                <div style="margin-top: 18px;">
+                    <label>راهکارهای فعال در این اجرا</label>
+                    <div class="toggles">
+                        <label class="toggle" id="t-sched">
+                            <input type="checkbox" id="enScheduling" />
+                            <span>🚀 صف‌بندی آگاه از تأخیر</span>
+                        </label>
+                        <label class="toggle" id="t-kv">
+                            <input type="checkbox" id="enKv" />
+                            <span>💾 مدیریت اولویت‌محور KV Cache</span>
+                        </label>
+                        <label class="toggle" id="t-chunk">
+                            <input type="checkbox" id="enChunk" />
+                            <span>🧩 پیش‌پردازش قطعه‌ای</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div style="margin-top: 22px; display: flex; gap: 10px;">
+                    <button class="btn btn-primary" id="btnStart">
+                        <i class="fas fa-play"></i> شروع ارزیابی
+                    </button>
+                    <button class="btn btn-secondary" id="btnReset">
+                        <i class="fas fa-undo"></i> بازنشانی
+                    </button>
+                </div>
+
+                <div class="progress" id="progress">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+            </div>
+
+            <!-- ====================== Results ====================== -->
+            <div id="resultsSection">
+                <div class="card" style="margin-bottom: 20px;">
+                    <h3>
+                        <i class="fas fa-chart-bar"></i> خلاصه‌ی نتایج
+                        <button class="btn btn-secondary" id="btnCopySummary"
+                                style="margin-inline-start:auto; padding:6px 14px; font-size:12px;">
+                            <i class="fas fa-copy"></i> کپی (TSV)
+                        </button>
+                    </h3>
+
+                    <div class="summary-grid">
+                        <div class="stat">
+                            <div class="label">TTFT p95</div>
+                            <div class="val" id="s-ttft">— <span class="unit">ms</span></div>
+                        </div>
+                        <div class="stat">
+                            <div class="label">TPOT p95</div>
+                            <div class="val" id="s-tpot">— <span class="unit">ms</span></div>
+                        </div>
+                        <div class="stat">
+                            <div class="label">Throughput</div>
+                            <div class="val" id="s-rps">— <span class="unit">req/s</span></div>
+                        </div>
+                        <div class="stat">
+                            <div class="label">موفقیت</div>
+                            <div class="val" id="s-success">—</div>
+                        </div>
+                    </div>
+
+                    <div class="summary-grid" style="grid-template-columns: repeat(3,1fr);">
+                        <div class="stat">
+                            <div class="label">TTFT: p50 / p95 / p99 / max</div>
+                            <div class="val" style="font-size:14px;" id="s-ttft-all">—</div>
+                        </div>
+                        <div class="stat">
+                            <div class="label">TPOT: p50 / p95 / p99 / max</div>
+                            <div class="val" style="font-size:14px;" id="s-tpot-all">—</div>
+                        </div>
+                        <div class="stat">
+                            <div class="label">E2E: p50 / p95 / p99 / max</div>
+                            <div class="val" style="font-size:14px;" id="s-e2e-all">—</div>
+                        </div>
+                    </div>
+
+                    <div id="errorsBox" style="margin-top: 12px;"></div>
+                </div>
+
+                <div class="card">
+                    <h3>
+                        <i class="fas fa-list-ol"></i> جزئیات درخواست‌ها
+                        <span id="rowCount" style="color:var(--muted); font-weight:400; font-size:12px;"></span>
+                        <button class="btn btn-secondary" id="btnCopyDetails"
+                                style="margin-inline-start:auto; padding:6px 14px; font-size:12px;">
+                            <i class="fas fa-copy"></i> کپی (TSV)
+                        </button>
+                    </h3>
+                    <div style="overflow-x:auto;">
+                        <table id="resultsTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>User</th>
+                                    <th>Prompt</th>
+                                    <th>TTFT (ms)</th>
+                                    <th>TPOT (ms)</th>
+                                    <th>E2E (ms)</th>
+                                    <th>Chunks</th>
+                                    <th>وضعیت</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        "use strict";
+
+        let currentRunId = null;
+        let pollTimer = null;
+        let currentSummary = null;
+        let currentResults = [];
+
+        const $ = id => document.getElementById(id);
+
+        // چک‌باکس‌ها را فعال/غیرفعال کن
+        ["enScheduling", "enKv", "enChunk"].forEach(id => {
+            const cb = $(id);
+            cb.addEventListener("change", () => {
+                const tog = cb.closest(".toggle");
+                tog.classList.toggle("active", cb.checked);
+            });
+        });
+
+        // ============ شروع آزمون ============
+        $("btnStart").addEventListener("click", async () => {
+            const promptsText = $("prompts").value.trim();
+            const prompts = promptsText
+                ? promptsText.split("\n").map(s => s.trim()).filter(Boolean)
+                : [];
+
+            const body = {
+                concurrency: parseInt($("concurrency").value) || 4,
+                requestsPerUser: parseInt($("perUser").value) || 1,
+                timeoutSeconds: parseInt($("timeout").value) || 120,
+                enableScheduling: $("enScheduling").checked,
+                enableKvCachePolicy: $("enKv").checked,
+                enableChunkedPrefill: $("enChunk").checked,
+                variantName: $("variant").value || "custom",
+                prompts: prompts,
+                systemPrompt: $("systemPrompt").value || null
+            };
+
+            $("btnStart").disabled = true;
+            $("btnStart").innerHTML = '<i class="fas fa-spinner fa-spin"></i> در حال اجرا...';
+
+            try {
+                const r = await fetch("/api/loadtest/start", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body)
+                });
+                if (!r.ok) throw new Error(await r.text());
+                const data = await r.json();
+                currentRunId = data.runId;
+
+                $("resultsSection").classList.add("active");
+                $("resultsTable").querySelector("tbody").innerHTML = "";
+                $("errorsBox").innerHTML = "";
+                $("progress").classList.add("active");
+                $("progressBar").style.width = "0%";
+
+                startPolling();
+            } catch (e) {
+                alert("خطا در شروع: " + e.message);
+                $("btnStart").disabled = false;
+                $("btnStart").innerHTML = '<i class="fas fa-play"></i> شروع ارزیابی';
+            }
+        });
+
+        // ============ Polling ============
+        function startPolling() {
+            clearInterval(pollTimer);
+            pollTimer = setInterval(async () => {
+                try {
+                    const r = await fetch(`/api/loadtest/status/${currentRunId}`);
+                    if (!r.ok) return;
+                    const s = await r.json();
+
+                    const pct = s.total > 0 ? (s.completed / s.total) * 100 : 0;
+                    $("progressBar").style.width = pct + "%";
+
+                    if (s.status === "Completed" || s.status === "Failed") {
+                        clearInterval(pollTimer);
+                        await loadFinalResults();
+                        $("btnStart").disabled = false;
+                        $("btnStart").innerHTML = '<i class="fas fa-play"></i> شروع ارزیابی';
+                        $("progress").classList.remove("active");
+                    }
+                } catch { /* ignore */ }
+            }, 1500);
+        }
+
+        // ============ بارگذاری نتایج نهایی ============
+        async function loadFinalResults() {
+            const [sumR, resR] = await Promise.all([
+                fetch(`/api/loadtest/summary/${currentRunId}`),
+                fetch(`/api/loadtest/results/${currentRunId}`)
+            ]);
+            currentSummary = await sumR.json();
+            currentResults = await resR.json();
+
+            // خلاصه
+            $("s-ttft").innerHTML = `${currentSummary.ttft.p95} <span class="unit">ms</span>`;
+            $("s-tpot").innerHTML = `${currentSummary.tpot.p95} <span class="unit">ms</span>`;
+            $("s-rps").innerHTML  = `${currentSummary.throughputRps} <span class="unit">req/s</span>`;
+
+            const total = currentSummary.totalRequests;
+            const succ = currentSummary.successful;
+            const succPct = total > 0 ? ((succ / total) * 100).toFixed(1) : "0";
+            $("s-success").innerHTML = `${succ}/${total} <span class="unit">(${succPct}%)</span>`;
+
+            $("s-ttft-all").textContent =
+                `${currentSummary.ttft.p50} / ${currentSummary.ttft.p95} / ${currentSummary.ttft.p99} / ${currentSummary.ttft.max}`;
+            $("s-tpot-all").textContent =
+                `${currentSummary.tpot.p50} / ${currentSummary.tpot.p95} / ${currentSummary.tpot.p99} / ${currentSummary.tpot.max}`;
+            $("s-e2e-all").textContent =
+                `${currentSummary.e2e.p50} / ${currentSummary.e2e.p95} / ${currentSummary.e2e.p99} / ${currentSummary.e2e.max}`;
+
+            // خطاها
+            const errors = currentSummary.errorsByKind;
+            const errKeys = Object.keys(errors);
+            if (errKeys.length > 0) {
+                $("errorsBox").innerHTML = "❌ خطاها: " + errKeys
+                    .map(k => `<span class="badge fail">${k}: ${errors[k]}</span>`)
+                    .join(" ");
+            } else {
+                $("errorsBox").innerHTML = '<span class="badge ok">بدون خطا</span>';
+            }
+
+            // جدول جزئیات
+            const tbody = $("resultsTable").querySelector("tbody");
+            tbody.innerHTML = "";
+
+            currentResults.forEach((r, i) => {
+                const tr = document.createElement("tr");
+                tr.className = r.success ? "ok" : "fail";
+
+                const promptShort = r.prompt.length > 60
+                    ? r.prompt.substring(0, 60) + "…" : r.prompt;
+
+                tr.innerHTML = `
+                    <td class="num">${i + 1}</td>
+                    <td class="num">U${r.userIndex + 1}</td>
+                    <td title="${escapeHtml(r.prompt)}">${escapeHtml(promptShort)}</td>
+                    <td class="num">${r.ttftMs.toFixed(0)}</td>
+                    <td class="num">${r.tpotMs.toFixed(1)}</td>
+                    <td class="num">${r.e2eMs.toFixed(0)}</td>
+                    <td class="num">${r.chunkCount}</td>
+                    <td>${r.success
+                        ? '<span class="badge ok">موفق</span>'
+                        : `<span class="badge fail" title="${escapeHtml(r.errorMessage || '')}">${r.errorKind || 'خطا'}</span>`}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            $("rowCount").textContent = `(${currentResults.length} درخواست)`;
+        }
+
+        // ============ کپی ============
+        $("btnCopySummary").addEventListener("click", async () => {
+            if (!currentSummary) return;
+            const s = currentSummary;
+
+            const tsv = [
+                ["Field", "Value"].join("\t"),
+                ["RunId", s.runId].join("\t"),
+                ["Variant", s.variantName].join("\t"),
+                ["Concurrency", s.concurrency].join("\t"),
+                ["TotalRequests", s.totalRequests].join("\t"),
+                ["Successful", s.successful].join("\t"),
+                ["Failed", s.failed].join("\t"),
+                ["DurationSeconds", s.durationSeconds].join("\t"),
+                ["ThroughputRps", s.throughputRps].join("\t"),
+                ["ThroughputTps", s.throughputTps].join("\t"),
+                ["TTFT_P50", s.ttft.p50].join("\t"),
+                ["TTFT_P95", s.ttft.p95].join("\t"),
+                ["TTFT_P99", s.ttft.p99].join("\t"),
+                ["TTFT_Max", s.ttft.max].join("\t"),
+                ["TPOT_P50", s.tpot.p50].join("\t"),
+                ["TPOT_P95", s.tpot.p95].join("\t"),
+                ["TPOT_P99", s.tpot.p99].join("\t"),
+                ["TPOT_Max", s.tpot.max].join("\t"),
+                ["E2E_P50", s.e2e.p50].join("\t"),
+                ["E2E_P95", s.e2e.p95].join("\t"),
+                ["E2E_P99", s.e2e.p99].join("\t"),
+                ["E2E_Max", s.e2e.max].join("\t"),
+            ].join("\n");
+
+            const ok = await copyText(tsv);
+            flash($("btnCopySummary"), ok);
+        });
+
+        $("btnCopyDetails").addEventListener("click", async () => {
+            if (!currentResults.length) return;
+
+            const header = ["#", "User", "Prompt", "TTFT_ms", "TPOT_ms", "E2E_ms",
+                            "Chunks", "Success", "ErrorKind", "ErrorMessage"].join("\t");
+
+            const lines = currentResults.map((r, i) => [
+                i + 1,
+                r.userIndex + 1,
+                (r.prompt || "").replace(/\t/g, " ").replace(/\n/g, " "),
+                r.ttftMs.toFixed(1),
+                r.tpotMs.toFixed(2),
+                r.e2eMs.toFixed(1),
+                r.chunkCount,
+                r.success ? 1 : 0,
+                r.errorKind || "",
+                (r.errorMessage || "").replace(/\t/g, " ").replace(/\n/g, " ")
+            ].join("\t"));
+
+            const tsv = [header, ...lines].join("\n");
+            const ok = await copyText(tsv);
+            flash($("btnCopyDetails"), ok);
+        });
+
+        // ============ ابزار ============
+        $("btnReset").addEventListener("click", () => {
+            clearInterval(pollTimer);
+            currentRunId = null;
+            currentSummary = null;
+            currentResults = [];
+            $("resultsSection").classList.remove("active");
+            $("btnStart").disabled = false;
+            $("btnStart").innerHTML = '<i class="fas fa-play"></i> شروع ارزیابی';
+        });
+
+        async function copyText(text) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                const ok = document.execCommand("copy");
+                ta.remove();
+                return ok;
+            } catch { return false; }
+        }
+
+        function flash(btn, ok) {
+            const orig = btn.innerHTML;
+            btn.innerHTML = ok
+                ? '<i class="fas fa-check"></i> کپی شد'
+                : '<i class="fas fa-times"></i> ناموفق';
+            btn.style.background = ok ? "rgba(76,175,80,.3)" : "rgba(229,57,53,.3)";
+            setTimeout(() => {
+                btn.innerHTML = orig;
+                btn.style.background = "";
+            }, 1400);
+        }
+
+        function escapeHtml(s) {
+            return String(s ?? "").replace(/[&<>"']/g, c => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            }[c]));
+        }
+    </script>
+
+</body>
+</html>

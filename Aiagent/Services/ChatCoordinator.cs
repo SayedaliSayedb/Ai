@@ -407,11 +407,21 @@ public class ChatCoordinator : BackgroundService
                             _logger.LogWarning("⚠️ KV cache پر شده است.");
                             _metrics.RecordNoKvSlot();
 
-                            // ⬅️ [KV CACHE POLICY] انتخاب سیاست حذف
+                            bool slotFreed = false;
+
                             if (_kvCacheState.Enabled)
-                                HandleNoKvSlotWithPolicy();
+                                slotFreed = HandleNoKvSlotWithPolicy();
                             else
+                            {
                                 CleanupInactive(TimeSpan.FromMinutes(5));
+                                slotFreed = true;
+                            }
+
+                            // ⬅️ [FIX] اگر هیچ slotی آزاد نشد، حتماً صبر کن
+                            if (!slotFreed)
+                            {
+                                await Task.Delay(200, stoppingToken);
+                            }
 
                             continue;
                         }
@@ -540,6 +550,35 @@ public class ChatCoordinator : BackgroundService
         }
     }
     // =====================================================
+    // ⬅️ [FIX] آزادسازی slot مکالمات تمام‌شده‌ی غیرفعال
+    // =====================================================
+    /// <summary>
+    /// مکالمات تمام‌شده‌ای که مدتی غیرفعال بوده‌اند را حذف می‌کند تا slot آزاد شود.
+    /// این متد باید داخل _executorLock صدا زده شود.
+    /// </summary>
+    private void PruneIdleCompletedConversations()
+    {
+        var thresholdSeconds = _kvCacheOptions.CompletedIdleThresholdSeconds;
+        if (thresholdSeconds <= 0) return;
+
+        var threshold = TimeSpan.FromSeconds(thresholdSeconds);
+        var now = DateTime.UtcNow;
+
+        var candidates = _conversations.Values
+            .Where(c => c.IsCompleted
+                     && c.Conversation != null
+                     && (now - c.LastActivity) > threshold)
+            .ToList();
+
+        foreach (var c in candidates)
+        {
+            _logger.LogInformation(
+                "♻️ حذف مکالمه‌ی تمام‌شده {ConnectionId} (idle={Idle:F0}s) برای آزادسازی slot",
+                c.ConnectionId, (now - c.LastActivity).TotalSeconds);
+            RemoveConversation(c.ConnectionId);
+        }
+    }
+    // =====================================================
     // ⬅️ [CHUNKED PREFILL] تغذیه‌ی قطعات
     // =====================================================
 
@@ -590,8 +629,11 @@ public class ChatCoordinator : BackgroundService
     {
         if (_scheduler.PendingCount == 0) return;
 
+        // ⬅️ [FIX] اول همهی مکالمات تمامشده را آزاد کن (بدون انتظار 30s)
+        FreeAllCompletedSlots();
+
         var activeCount = _conversations.Values.Count(
-            c => c.IsAdmitted && !c.IsCompleted && c.Conversation != null);
+            c => c.IsAdmitted && c.Conversation != null);
 
         var maxActive = _schedulingOptions.MaxActiveConversations > 0
             ? _schedulingOptions.MaxActiveConversations
@@ -606,6 +648,25 @@ public class ChatCoordinator : BackgroundService
 
         foreach (var state in admitted)
             AdmitState(state, "queue");
+    }
+
+    /// <summary>
+    /// ⬅️ [FIX] همهی مکالمات تمامشده را فوراً حذف میکند تا slot آزاد شود.
+    /// این متد را فقط در زمان فشار صف صدا بزن.
+    /// </summary>
+    private void FreeAllCompletedSlots()
+    {
+        var completed = _conversations.Values
+            .Where(c => c.IsCompleted && c.Conversation != null)
+            .ToList();
+
+        foreach (var c in completed)
+        {
+            _logger.LogInformation(
+                "♻️ آزادسازی فوری slot مکالمهی تمامشده {ConnectionId}",
+                c.ConnectionId);
+            RemoveConversation(c.ConnectionId);
+        }
     }
 
     private void FlushPendingAdmissions()
@@ -686,29 +747,32 @@ public class ChatCoordinator : BackgroundService
     // ⬅️ [KV CACHE POLICY] مدیریت NoKvSlot با سیاست اولویت‌محور
     // =====================================================
 
-    private void HandleNoKvSlotWithPolicy()
+    private bool HandleNoKvSlotWithPolicy()
     {
         var snapshot = _conversations.Values.ToList();
-        if (snapshot.Count == 0) return;
+        if (snapshot.Count == 0) return false;
 
-        // ⚠️ ما داخل _executorLock هستیم؛ RemoveConversation امن است
-        // چون Conversation.Dispose روی slot فعلی که Infer شکست خورده تأثیر نمی‌گذارد.
         var victim = _kvCachePolicy.SelectVictim(snapshot, excludeConnectionId: null);
 
         if (victim == null)
         {
             _logger.LogWarning(
-                "🚫 NoKvSlot: هیچ قربانی مناسبی نبود (همه در حال استریم یا محافظت‌شده)؛ ادامه بدون حذف.");
-            return;
+                "⏳ NoKvSlot: هیچ قربانی مناسبی نبود. ۲۰۰ms صبر می‌کنیم.");
+            return false;   // ← هیچ slotی آزاد نشد
         }
 
         victim.WasEvicted = true;
         victim.EvictionReason = "kv_cache_pressure";
+        victim.ErrorMessage = "پاسخ شما به دلیل فشار حافظه قطع شد.";
+        victim.IsCompleted = true;   // ⬅️ [FIX] قبل از حذف، علامت بزن تمام شده
+        victim.TokenChannel.Writer.TryComplete();
         RemoveConversation(victim.ConnectionId);
 
         _logger.LogWarning(
-            "🗑️ KV Cache: قربانی {ConnectionId} حذف شد (priority={P:F2}, turns={T})",
-            victim.ConnectionId, victim.Priority, victim.TurnCount);
+            "🗑️ KV Cache: قربانی {ConnectionId} حذف شد (priority={P:F2})",
+            victim.ConnectionId, victim.Priority);
+
+        return true;   // ← یک slot آزاد شد
     }
 
     // =====================================================

@@ -2,14 +2,15 @@
 using Aiagent.Middleware;
 using Aiagent.Services;
 using Aiagent.Services.Auth;
+using Aiagent.Services.LoadTesting;
 using Aiagent.Services.Metrics;
+using Aiagent.Services.Scheduling;   // ⬅️ [SCHEDULING]
 using Aiagent.Services.Storage;
 using LLama.Native;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
-using System.Runtime.InteropServices;
-using Aiagent.Services.Scheduling;   // ⬅️ [SCHEDULING]
 using Microsoft.Extensions.Options;  // (در صورت نیاز)
+using System.Runtime.InteropServices;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -176,6 +177,8 @@ builder.Services.AddSingleton<IKvCacheEvictionPolicy, PriorityKvCachePolicy>();
 builder.Services.Configure<ChunkedPrefillOptions>(
     builder.Configuration.GetSection(ChunkedPrefillOptions.SectionName));
 builder.Services.AddSingleton<ChunkedPrefillState>();
+// ----- Load Testing -----
+builder.Services.AddSingleton<LoadTestService>();
 builder.Services.AddSingleton(sp =>
     new ChatCoordinator(
         sp.GetRequiredService<ILogger<ChatCoordinator>>(),
