@@ -179,6 +179,11 @@ builder.Services.Configure<ChunkedPrefillOptions>(
 builder.Services.AddSingleton<ChunkedPrefillState>();
 // ----- Load Testing -----
 builder.Services.AddSingleton<LoadTestService>();
+// ----- Prefix Sharing (راهکار ۳) -----
+builder.Services.Configure<PrefixSharingOptions>(
+    builder.Configuration.GetSection(PrefixSharingOptions.SectionName));
+builder.Services.AddSingleton<PrefixSharingState>();
+builder.Services.AddSingleton<PrefixCache>();
 builder.Services.AddSingleton(sp =>
     new ChatCoordinator(
         sp.GetRequiredService<ILogger<ChatCoordinator>>(),
@@ -190,8 +195,11 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<KvCachePolicyState>(),
         sp.GetRequiredService<IKvCacheEvictionPolicy>(),
         sp.GetRequiredService<IOptions<KvCachePolicyOptions>>(),
-        sp.GetRequiredService<ChunkedPrefillState>(),                    // ⬅️
-        sp.GetRequiredService<IOptions<ChunkedPrefillOptions>>()));      // ⬅️
+        sp.GetRequiredService<ChunkedPrefillState>(),
+        sp.GetRequiredService<IOptions<ChunkedPrefillOptions>>(),
+        sp.GetRequiredService<PrefixSharingState>(),             
+        sp.GetRequiredService<IOptions<PrefixSharingOptions>>(),  
+        sp.GetRequiredService<PrefixCache>()));                    
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatCoordinator>());
 
 // ----- TextAnalysisWorker -----

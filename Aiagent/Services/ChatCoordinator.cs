@@ -24,15 +24,24 @@ public class ChatCoordinator : BackgroundService
     private readonly ConcurrentDictionary<string, ConversationState> _conversations = new();
     private readonly ConcurrentDictionary<string, StreamingTokenDecoder> _decoders = new();
 
-    // ⬅️ [SCHEDULING] وابستگی‌های راهکار ۱
+    // === راهکار ۱: صف‌بندی ===
     private readonly SchedulingState _schedulingState;
     private readonly IRequestScheduler _scheduler;
     private readonly SchedulingOptions _schedulingOptions;
 
-    // ⬅️ [KV CACHE POLICY] وابستگی‌های راهکار ۲
+    // === راهکار ۲: KV Cache Policy ===
     private readonly KvCachePolicyState _kvCacheState;
     private readonly IKvCacheEvictionPolicy _kvCachePolicy;
     private readonly KvCachePolicyOptions _kvCacheOptions;
+
+    // === راهکار ۴: Chunked Prefill ===
+    private readonly ChunkedPrefillState _chunkedPrefillState;
+    private readonly ChunkedPrefillOptions _chunkedPrefillOptions;
+
+    // === راهکار ۳: Prefix Sharing ===
+    private readonly PrefixSharingState _prefixSharingState;
+    private readonly PrefixSharingOptions _prefixSharingOptions;
+    private readonly PrefixCache _prefixCache;
 
     private int MaxTokensPerResponse { get; }
     private uint SeqMax { get; }
@@ -42,9 +51,6 @@ public class ChatCoordinator : BackgroundService
         "Respond in the same language as the user's question. " +
         "When the user asks for code, write it in a fenced code block. " +
         "For normal greetings and questions, reply with plain text only.";
-
-    private readonly ChunkedPrefillState _chunkedPrefillState;
-    private readonly ChunkedPrefillOptions _chunkedPrefillOptions;
 
     public ChatCoordinator(
         ILogger<ChatCoordinator> logger,
@@ -56,34 +62,36 @@ public class ChatCoordinator : BackgroundService
         KvCachePolicyState kvCacheState,
         IKvCacheEvictionPolicy kvCachePolicy,
         IOptions<KvCachePolicyOptions> kvCacheOptions,
-        ChunkedPrefillState chunkedPrefillState,                   // ⬅️
-        IOptions<ChunkedPrefillOptions> chunkedPrefillOptions)     // ⬅️
+        ChunkedPrefillState chunkedPrefillState,
+        IOptions<ChunkedPrefillOptions> chunkedPrefillOptions,
+        PrefixSharingState prefixSharingState,
+        IOptions<PrefixSharingOptions> prefixSharingOptions,
+        PrefixCache prefixCache)
     {
-        // ... انتساب‌های قبلی ...
-
-        _chunkedPrefillState = chunkedPrefillState;                // ⬅️
-        _chunkedPrefillOptions = chunkedPrefillOptions.Value;
-        // --- وابستگی‌های اصلی (بدون تکرار) ---
         _logger = logger;
         _metrics = metrics;
 
-        // --- راهکار ۱: صف‌بندی ---
         _schedulingState = schedulingState;
         _scheduler = scheduler;
         _schedulingOptions = schedulingOptions.Value;
 
-        // --- راهکار ۲: سیاست KV Cache ---
         _kvCacheState = kvCacheState;
         _kvCachePolicy = kvCachePolicy;
         _kvCacheOptions = kvCacheOptions.Value;
 
-        // --- خواندن تنظیمات LLM ---
+        _chunkedPrefillState = chunkedPrefillState;
+        _chunkedPrefillOptions = chunkedPrefillOptions.Value;
+
+        _prefixSharingState = prefixSharingState;
+        _prefixSharingOptions = prefixSharingOptions.Value;
+        _prefixCache = prefixCache;
+
         var llm = config.GetSection("Llm");
         var modelPath = llm["ModelPath"] ?? "models/gemma-3-4b-it-Q4_K_M.gguf";
 
         var gpuLayerCount = llm.GetValue("GpuLayerCount", 99);
         var contextSize = llm.GetValue("ContextSize", 4096u);
-        SeqMax = llm.GetValue("SeqMax", 16u);
+        SeqMax = llm.GetValue("SeqMax", 8u);
         var batchSize = llm.GetValue("BatchSize", 512u);
         var uBatchSize = llm.GetValue("UBatchSize", 512u);
         var flashAttention = llm.GetValue("FlashAttention", true);
@@ -91,7 +99,7 @@ public class ChatCoordinator : BackgroundService
         var threads = llm.GetValue("Threads",
             Math.Min(8, Math.Max(2, Environment.ProcessorCount / 2)));
 
-        MaxTokensPerResponse = llm.GetValue("MaxTokensPerResponse", 1024);
+        MaxTokensPerResponse = llm.GetValue("MaxTokensPerResponse", 4096);
 
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Model file not found: {modelPath}");
@@ -116,12 +124,12 @@ public class ChatCoordinator : BackgroundService
         _model = LLamaWeights.LoadFromFile(parameters);
         _executor = new BatchedExecutor(_model, parameters);
 
-        // ⬅️ استفاده از _kvCacheOptions تا warning ندهد و اطلاعات مفید بدهد
         _logger.LogInformation(
-            "✅ مدل بارگذاری شد. | Scheduling.Enabled={Sched} | KvCachePolicy.Enabled={Kv} | W2_Streaming={W2}",
+            "✅ مدل بارگذاری شد. | Sched={S} | KvCache={K} | Chunked={C} | PrefixCache={P}",
             _schedulingState.Enabled,
             _kvCacheState.Enabled,
-            _kvCacheOptions.W2_IsStreaming);
+            _chunkedPrefillState.Enabled,
+            _prefixSharingState.Enabled);
     }
 
     // =====================================================
@@ -134,7 +142,6 @@ public class ChatCoordinator : BackgroundService
 
     public int GetMaxSequences() => (int)SeqMax;
 
-    // ⬅️ [SCHEDULING] صف واقعی + در انتظار نوبت بعدی
     public int GetQueuedCount()
     {
         var waiting = _conversations.Values.Count(
@@ -157,9 +164,6 @@ public class ChatCoordinator : BackgroundService
     public ConversationState? GetConversation(string connectionId)
         => _conversations.TryGetValue(connectionId, out var s) ? s : null;
 
-    /// <summary>
-    /// دسترسی خارجی (برای Controller) به لیست مکالمات — snapshot امن.
-    /// </summary>
     public IReadOnlyCollection<ConversationState> GetAllConversations()
         => _conversations.Values.ToList();
 
@@ -181,11 +185,13 @@ public class ChatCoordinator : BackgroundService
                 return existingState;
             }
 
-            var formatted = GemmaPromptFormatter.FormatFirstTurn(
-                userMessage,
-                !string.IsNullOrWhiteSpace(systemPrompt) ? systemPrompt : DefaultSystemPrompt);
+            var effectiveSystemPrompt = !string.IsNullOrWhiteSpace(systemPrompt)
+                ? systemPrompt
+                : DefaultSystemPrompt;
 
-            // ⬅️ [SCHEDULING] محاسبه‌ی هزینه
+            var formatted = GemmaPromptFormatter.FormatFirstTurn(
+                userMessage, effectiveSystemPrompt);
+
             var cost = RequestCost.Compute(
                 promptLength: RequestCost.ApproximateTokens(formatted),
                 expectedOutputLength: RequestCost.EstimateOutputLength(userMessage),
@@ -196,7 +202,7 @@ public class ChatCoordinator : BackgroundService
             {
                 ConnectionId = connectionId,
                 Conversation = null,
-                SystemPrompt = systemPrompt,
+                SystemPrompt = effectiveSystemPrompt,   // ← همیشه مقدار داشته باشد
                 IsCompleted = false,
                 IsWaitingForPrompt = false,
                 GeneratedTokens = 0,
@@ -204,15 +210,15 @@ public class ChatCoordinator : BackgroundService
                 TokenChannel = Channel.CreateUnbounded<string>(),
                 PromptSubmittedAt = DateTime.UtcNow,
                 Cost = cost,
-
-                // ⬅️ [KV CACHE POLICY] نوبت اول
                 TurnCount = 1,
-                TotalGeneratedTokens = 0
+                TotalGeneratedTokens = 0,
+
+                // ⬅️ [PREFIX SHARING]
+                RawUserMessage = userMessage
             };
 
             if (_schedulingState.Enabled)
             {
-                // === مسیر راهکار ۱: صف ===
                 newState.PendingPrompt = formatted;
                 newState.IsAdmitted = false;
                 newState.EnqueuedAt = DateTimeOffset.UtcNow;
@@ -226,7 +232,6 @@ public class ChatCoordinator : BackgroundService
             }
             else
             {
-                // === مسیر Baseline ===
                 var conv = _executor.Create();
                 conv.Prompt(formatted);
 
@@ -263,13 +268,12 @@ public class ChatCoordinator : BackgroundService
             state.TokenChannel.Writer.TryComplete();
             state.TokenChannel = Channel.CreateUnbounded<string>();
 
-            // ⬅️ [KV CACHE POLICY] ابتدا آمار انباشته، سپس ریست
             state.TotalGeneratedTokens += state.GeneratedTokens;
             state.TurnCount++;
 
             state.IsCompleted = false;
             state.IsWaitingForPrompt = false;
-            state.GeneratedTokens = 0;          // ← حالا ریست امن است
+            state.GeneratedTokens = 0;
             state.LastActivity = DateTime.UtcNow;
             state.PromptSubmittedAt = DateTime.UtcNow;
             state.FirstTokenAt = null;
@@ -277,9 +281,11 @@ public class ChatCoordinator : BackgroundService
             state.ErrorMessage = null;
             _decoders.TryRemove(connectionId, out _);
 
+            // ⬅️ [PREFIX SHARING] برای نوبت‌های بعدی، raw message را هم به‌روز کن
+            state.RawUserMessage = userMessage;
+
             var formatted = GemmaPromptFormatter.FormatFollowUpTurn(userMessage);
 
-            // ⬅️ [SCHEDULING] محاسبه‌ی هزینه
             var cost = RequestCost.Compute(
                 promptLength: RequestCost.ApproximateTokens(formatted),
                 expectedOutputLength: RequestCost.EstimateOutputLength(userMessage),
@@ -319,7 +325,7 @@ public class ChatCoordinator : BackgroundService
     {
         if (_conversations.TryRemove(connectionId, out var state))
         {
-            _scheduler.Remove(connectionId);          // ⬅️ [SCHEDULING]
+            _scheduler.Remove(connectionId);
             try { state.TokenChannel.Writer.TryComplete(); } catch { }
             try { state.Conversation?.Dispose(); } catch { }
             _decoders.TryRemove(connectionId, out _);
@@ -333,8 +339,98 @@ public class ChatCoordinator : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("🔄 حلقه‌ی مرکزی شروع به کار کرد.");
+
+        // ⬅️ [PREFIX SHARING] warmup قبل از شروع حلقه
+        if (_prefixSharingState.Enabled)
+        {
+            await WarmupPrefixCacheAsync(stoppingToken);
+        }
+
         await RunInferenceLoopAsync(stoppingToken);
     }
+
+    // =====================================================
+    // ⬅️ [PREFIX SHARING] Warmup: prefill System Prompt یک‌بار
+    // =====================================================
+    // =====================================================
+    // ⬅️ [PREFIX SHARING] Warmup: prefill System Prompt یکبار
+    // =====================================================
+    private async Task WarmupPrefixCacheAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            var systemPrompt = _prefixSharingOptions.DefaultSystemPromptOverride
+                ?? DefaultSystemPrompt;
+
+            var prefixText = BuildSharedPrefix(systemPrompt);
+            var prefixTokens = RequestCost.ApproximateTokens(prefixText);
+
+            if (prefixTokens < _prefixSharingOptions.MinSystemPromptTokens)
+            {
+                _logger.LogInformation(
+                    "⏭️ PrefixCache warmup رد شد: System Prompt کوتاه ({T} < {Min})",
+                    prefixTokens, _prefixSharingOptions.MinSystemPromptTokens);
+                return;
+            }
+
+            _logger.LogInformation(
+                "🔥 PrefixCache warmup شروع: prefill {T} توکن System Prompt",
+                prefixTokens);
+
+            await _executorLock.WaitAsync(stoppingToken);
+            try
+            {
+                var template = _executor.Create();
+                template.Prompt(prefixText);
+
+                var result = await _executor.Infer(stoppingToken);
+                if (result != DecodeResult.Ok)
+                {
+                    _logger.LogWarning(
+                        "⚠️ PrefixCache warmup ناموفق: {Result}", result);
+                    template.Dispose();
+                    return;
+                }
+
+                // ⬅️ [FIX] SaveState فقط با filePath کار می‌کند
+                var tempFile = Path.Combine(Path.GetTempPath(),
+                    $"prefixcache_warmup_{Guid.NewGuid():N}.bin");
+
+                try
+                {
+                    _executor.Context.SaveState(tempFile);
+                    var stateBytes = await File.ReadAllBytesAsync(tempFile, stoppingToken);
+                    _prefixCache.Store(systemPrompt, stateBytes, prefixTokens);
+
+                    _logger.LogInformation(
+                        "✅ PrefixCache آماده ({Size}KB)", stateBytes.Length / 1024);
+                }
+                finally
+                {
+                    try { File.Delete(tempFile); } catch { }
+                }
+
+                // حالا template را Dispose کن
+                template.Dispose();
+            }
+            finally
+            {
+                _executorLock.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "خطا در PrefixCache warmup");
+        }
+    }
+
+    /// <summary>ساخت prefix مشترک بین همه‌ی کاربران.</summary>
+    private static string BuildSharedPrefix(string systemPrompt)
+        => $"<start_of_turn>user\n{systemPrompt}\n\n";
+
+    /// <summary>ساخت suffix اختصاصی هر کاربر (بدون prefix مشترک).</summary>
+    private static string BuildSharedSuffix(string userMessage)
+        => $"{userMessage}<end_of_turn>\n<start_of_turn>model\n";
 
     private async Task RunInferenceLoopAsync(CancellationToken stoppingToken)
     {
@@ -367,35 +463,25 @@ public class ChatCoordinator : BackgroundService
 
                 try
                 {
-                    // ⬅️ [SCHEDULING] مرحله ۰: مدیریت صف
+                    // مرحله ۰: مدیریت صف
                     if (_schedulingState.Enabled)
-                    {
                         ProcessPendingAdmissions();
-                    }
                     else if (_scheduler.PendingCount > 0)
-                    {
                         FlushPendingAdmissions();
-                    }
 
-                    // ⬅️ [KV CACHE POLICY] به‌روزرسانی دوره‌ای اولویت‌ها
+                    // به‌روزرسانی اولویت‌ها
                     if (_kvCacheState.Enabled && !_conversations.IsEmpty)
-                    {
                         _kvCachePolicy.UpdatePriorities(_conversations.Values.ToList());
-                    }
-                    // ============================================
-                    // ⬅️ [CHUNKED PREFILL] مرحله ۰.۵: تغذیه‌ی قطعات
-                    // ============================================
+
+                    // تغذیه‌ی قطعات
                     if (_chunkedPrefillState.Enabled)
-                    {
                         FeedPrefillChunks();
-                    }
-                    // ============================================
+
                     // مرحله ۱: Infer
                     // ============================================
+                    // ⬅️ [FIX] دیگر IsCompleted را چک نمی‌کنیم، تا EOG token پردازش شود
                     bool anyRequiresInference = _conversations.Values
-                        .Any(c => c.IsAdmitted
-                               && !c.IsCompleted
-                               && c.Conversation != null
+                        .Any(c => c.Conversation != null
                                && c.Conversation.RequiresInference);
 
                     if (anyRequiresInference)
@@ -407,21 +493,12 @@ public class ChatCoordinator : BackgroundService
                             _logger.LogWarning("⚠️ KV cache پر شده است.");
                             _metrics.RecordNoKvSlot();
 
-                            bool slotFreed = false;
+                            bool slotFreed = _kvCacheState.Enabled
+                                ? HandleNoKvSlotWithPolicy()
+                                : FreeCompletedForFallback();
 
-                            if (_kvCacheState.Enabled)
-                                slotFreed = HandleNoKvSlotWithPolicy();
-                            else
-                            {
-                                CleanupInactive(TimeSpan.FromMinutes(5));
-                                slotFreed = true;
-                            }
-
-                            // ⬅️ [FIX] اگر هیچ slotی آزاد نشد، حتماً صبر کن
                             if (!slotFreed)
-                            {
                                 await Task.Delay(200, stoppingToken);
-                            }
 
                             continue;
                         }
@@ -437,25 +514,21 @@ public class ChatCoordinator : BackgroundService
                         _metrics.RecordBatch();
                     }
 
-                    // ============================================
                     // مرحله ۲: Sample
-                    // ============================================
                     foreach (var kvp in _conversations.ToArray())
                     {
                         var connectionId = kvp.Key;
                         var state = kvp.Value;
 
-                        // [SCHEDULING] رد درخواست‌های در صف
                         if (!state.IsAdmitted) continue;
                         if (state.Conversation == null) continue;
                         if (state.IsCompleted) continue;
                         if (!state.Conversation.RequiresSampling) continue;
-                        // ⬅️ [CHUNKED PREFILL] تا اتمام Prefill، نمونه‌برداری نکن
                         if (state.IsPrefilling) continue;
+
                         var token = state.Conversation.Sample(sampler);
                         var now = DateTime.UtcNow;
 
-                        // --- TTFT ---
                         if (state.FirstTokenAt == null && state.PromptSubmittedAt.HasValue)
                         {
                             state.FirstTokenAt = now;
@@ -463,7 +536,6 @@ public class ChatCoordinator : BackgroundService
                             _metrics.RecordTtft(ttftMs);
                         }
 
-                        // --- TPOT ---
                         if (state.LastTokenAt.HasValue)
                         {
                             var tpotMs = (now - state.LastTokenAt.Value).TotalMilliseconds;
@@ -518,9 +590,7 @@ public class ChatCoordinator : BackgroundService
                     _executorLock.Release();
                 }
 
-                // ============================================
                 // تله‌متری
-                // ============================================
                 var nowTele = DateTime.UtcNow;
                 if ((nowTele - lastTelemetry).TotalSeconds >= 5)
                 {
@@ -549,78 +619,7 @@ public class ChatCoordinator : BackgroundService
             }
         }
     }
-    // =====================================================
-    // ⬅️ [FIX] آزادسازی slot مکالمات تمام‌شده‌ی غیرفعال
-    // =====================================================
-    /// <summary>
-    /// مکالمات تمام‌شده‌ای که مدتی غیرفعال بوده‌اند را حذف می‌کند تا slot آزاد شود.
-    /// این متد باید داخل _executorLock صدا زده شود.
-    /// </summary>
-    private void PruneIdleCompletedConversations()
-    {
-        var thresholdSeconds = _kvCacheOptions.CompletedIdleThresholdSeconds;
-        if (thresholdSeconds <= 0) return;
 
-        var threshold = TimeSpan.FromSeconds(thresholdSeconds);
-        var now = DateTime.UtcNow;
-
-        var candidates = _conversations.Values
-            .Where(c => c.IsCompleted
-                     && c.Conversation != null
-                     && (now - c.LastActivity) > threshold)
-            .ToList();
-
-        foreach (var c in candidates)
-        {
-            _logger.LogInformation(
-                "♻️ حذف مکالمه‌ی تمام‌شده {ConnectionId} (idle={Idle:F0}s) برای آزادسازی slot",
-                c.ConnectionId, (now - c.LastActivity).TotalSeconds);
-            RemoveConversation(c.ConnectionId);
-        }
-    }
-    // =====================================================
-    // ⬅️ [CHUNKED PREFILL] تغذیه‌ی قطعات
-    // =====================================================
-
-    /// <summary>
-    /// در هر گام، حداکثر MaxChunksPerStep قطعه به مکالمات در حال prefill می‌دهد.
-    /// این متد باید داخل _executorLock صدا زده شود.
-    /// </summary>
-    private void FeedPrefillChunks()
-    {
-        var budget = _chunkedPrefillOptions.MaxChunksPerStep;
-        if (budget <= 0) return;
-
-        foreach (var state in _conversations.Values)
-        {
-            if (budget <= 0) break;
-
-            if (!state.IsAdmitted) continue;
-            if (!state.IsPrefilling) continue;
-            if (state.Conversation == null) continue;
-            if (state.PrefillChunks == null || state.PrefillChunks.Count == 0)
-            {
-                state.IsPrefilling = false;
-                continue;
-            }
-
-            // اگر مکالمه هنوز مشغول Infer قبلی است، صبر کن
-            if (state.Conversation.RequiresInference) continue;
-
-            var chunk = state.PrefillChunks.Dequeue();
-            state.Conversation.Prompt(chunk);
-            budget--;
-
-            if (state.PrefillChunks.Count == 0)
-            {
-                state.IsPrefilling = false;
-                state.PrefillChunks = null;
-                _logger.LogDebug(
-                    "🧩 {ConnectionId} Prefill کامل شد؛ آماده‌ی Decode.",
-                    state.ConnectionId);
-            }
-        }
-    }
     // =====================================================
     // ⬅️ [SCHEDULING] مدیریت صف
     // =====================================================
@@ -629,7 +628,6 @@ public class ChatCoordinator : BackgroundService
     {
         if (_scheduler.PendingCount == 0) return;
 
-        // ⬅️ [FIX] اول همهی مکالمات تمامشده را آزاد کن (بدون انتظار 30s)
         FreeAllCompletedSlots();
 
         var activeCount = _conversations.Values.Count(
@@ -650,10 +648,6 @@ public class ChatCoordinator : BackgroundService
             AdmitState(state, "queue");
     }
 
-    /// <summary>
-    /// ⬅️ [FIX] همهی مکالمات تمامشده را فوراً حذف میکند تا slot آزاد شود.
-    /// این متد را فقط در زمان فشار صف صدا بزن.
-    /// </summary>
     private void FreeAllCompletedSlots()
     {
         var completed = _conversations.Values
@@ -663,7 +657,7 @@ public class ChatCoordinator : BackgroundService
         foreach (var c in completed)
         {
             _logger.LogInformation(
-                "♻️ آزادسازی فوری slot مکالمهی تمامشده {ConnectionId}",
+                "♻️ آزادسازی فوری slot مکالمه‌ی تمام‌شده {ConnectionId}",
                 c.ConnectionId);
             RemoveConversation(c.ConnectionId);
         }
@@ -679,21 +673,133 @@ public class ChatCoordinator : BackgroundService
         if (admitted.Count > 0)
             _logger.LogInformation("🔓 Flush صف: {N} درخواست فوراً پذیرفته شد.", admitted.Count);
     }
-
-    private void AdmitState(ConversationState state, string reason)
+    // =====================================================
+    // ⬅️ [NEW] تشخیص پیام کوتاه (که Prefix Sharing برایش مناسب نیست)
+    // =====================================================
+    /// <summary>
+    /// بررسی می‌کند آیا پیام کاربر به‌قدری بلند هست که Prefix Sharing
+    /// از دست رفتن زبان را جبران کند.
+    /// 
+    /// قاعده: پیام باید هم حداقل تعداد کاراکتر و هم حداقل تعداد کلمات را داشته باشد.
+    /// </summary>
+    private bool IsMessageLongEnoughForPrefix(string userMessage)
     {
-        try
+        if (string.IsNullOrWhiteSpace(userMessage))
+            return false;
+
+        var length = userMessage.Trim().Length;
+        if (length < _prefixSharingOptions.MinUserMessageLengthForPrefix)
+            return false;
+
+        var words = userMessage
+            .Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Length;
+
+        if (words < _prefixSharingOptions.MinUserMessageWordsForPrefix)
+            return false;
+
+        return true;
+    }
+    // =====================================================
+    // ⬅️ [ADMISSION] با ادغام هر سه راهکار
+    // =====================================================
+    private void AdmitState(ConversationState state, string reason)
+{
+    try
+    {
+        // ⬅️ [FIX] محافظت: اگر RequiresInference، در صف بمان
+        if (state.Conversation != null && state.Conversation.RequiresInference)
         {
-            if (state.Conversation == null)
+            _logger.LogDebug(
+                "⏸️ {ConnectionId}: conversation هنوز Infer نشده؛ به صف برمی‌گردد",
+                state.ConnectionId);
+
+            state.IsAdmitted = false;
+            state.EnqueuedAt = DateTimeOffset.UtcNow;
+            _scheduler.Enqueue(state);
+            return;
+        }
+
+        bool conversationCreated = false;
+        if (state.Conversation == null)
+        {
+            state.Conversation = _executor.Create();
+            conversationCreated = true;
+        }
+
+        bool usedPrefixCache = false;
+        bool usedChunked = false;
+
+            // === راهکار ۳: PrefixCache (فقط نوبت اول) ===
+            // === راهکار ۳: PrefixCache (فقط نوبت اول + پیام بلند) ===
+            bool shouldUsePrefixCache =
+                _prefixSharingState.Enabled
+                && conversationCreated
+                && state.TurnCount == 1
+                && !string.IsNullOrEmpty(state.RawUserMessage)
+                && IsMessageLongEnoughForPrefix(state.RawUserMessage);
+
+            if (shouldUsePrefixCache)
             {
-                var conv = _executor.Create();
-                state.Conversation = conv;
+                var systemPrompt = state.SystemPrompt ?? DefaultSystemPrompt;
+
+                if (_prefixCache.TryGetState(systemPrompt, out var cachedState)
+                    && cachedState != null)
+                {
+                    var tempFile = Path.Combine(Path.GetTempPath(),
+                        $"prefixcache_load_{Guid.NewGuid():N}.bin");
+
+                    try
+                    {
+                        File.WriteAllBytes(tempFile, cachedState);
+                        _executor.Context.LoadState(tempFile);
+
+                        var newConv = _executor.Create();
+                        var suffix = BuildSharedSuffix(state.RawUserMessage!);
+                        newConv.Prompt(suffix);
+
+                        state.Conversation.Dispose();
+                        state.Conversation = newConv;
+                        usedPrefixCache = true;
+                        _prefixSharingState.RecordHit();
+
+                        _logger.LogInformation(
+                            "♻️ PrefixCache HIT برای {ConnectionId} ({T} توکن صرفه‌جویی, msg={M}chars)",
+                            state.ConnectionId,
+                            _prefixCache.GetPromptTokens(systemPrompt),
+                            state.RawUserMessage!.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "خطا در PrefixCache برای {ConnectionId}؛ fallback",
+                            state.ConnectionId);
+                    }
+                    finally
+                    {
+                        try { File.Delete(tempFile); } catch { }
+                    }
+                }
+
+                if (!usedPrefixCache)
+                    _prefixSharingState.RecordMiss();
+            }
+            else if (_prefixSharingState.Enabled && state.TurnCount == 1)
+            {
+                // ⬅️ [NEW] لاگ برای رد کردن آگاهانه
+                _logger.LogDebug(
+                    "⏭️ PrefixCache رد شد برای {ConnectionId}: پیام کوتاه ({L} chars < {Min})",
+                    state.ConnectionId,
+                    state.RawUserMessage?.Length ?? 0,
+                    _prefixSharingOptions.MinUserMessageLengthForPrefix);
             }
 
-            // ⬅️ [CHUNKED PREFILL] تصمیم‌گیری درباره‌ی تدریجی بودن
+            // === fallback: Chunked Prefill یا مسیر عادی ===
+            if (!usedPrefixCache)
+        {
             var prompt = state.PendingPrompt!;
-            var useChunked =
-                _chunkedPrefillState.Enabled
+
+            var useChunked = _chunkedPrefillState.Enabled
                 && prompt.Length >= _chunkedPrefillOptions.MinLengthToChunk
                 && (!_chunkedPrefillOptions.OnlyFirstTurn || state.TurnCount <= 1);
 
@@ -702,16 +808,14 @@ public class ChatCoordinator : BackgroundService
                 var chunks = PrefillChunker.Split(
                     prompt, _chunkedPrefillOptions.ChunkSizeCharacters);
 
-                // قطعه‌ی اول را همین حالا Prompt می‌کنیم
                 state.Conversation.Prompt(chunks[0]);
-
-                // بقیه در صف می‌مانند
                 state.PrefillChunks = new Queue<string>(chunks.Skip(1));
                 state.IsPrefilling = state.PrefillChunks.Count > 0;
+                usedChunked = true;
 
                 _logger.LogInformation(
-                    "🧩 {ConnectionId} Chunked Prefill: {N} قطعه (first={Size} chars)",
-                    state.ConnectionId, chunks.Count, chunks[0].Length);
+                    "🧩 {ConnectionId} Chunked Prefill: {N} قطعه",
+                    state.ConnectionId, chunks.Count);
             }
             else
             {
@@ -719,32 +823,33 @@ public class ChatCoordinator : BackgroundService
                 state.PrefillChunks = null;
                 state.IsPrefilling = false;
             }
-
-            state.IsAdmitted = true;
-            state.AdmittedAt = DateTimeOffset.UtcNow;
-            state.PendingPrompt = null;
-            state.PromptSubmittedAt = DateTime.UtcNow;
-
-            var waited = state.EnqueuedAt is { } t
-                ? (DateTimeOffset.UtcNow - t).TotalMilliseconds
-                : 0;
-
-            _logger.LogInformation(
-                "✅ {ConnectionId} پذیرفته شد (reason={Reason}, waited={Wait:F0}ms, chunked={C})",
-                state.ConnectionId, reason, waited, useChunked);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "خطا در admission {ConnectionId}", state.ConnectionId);
-            state.ErrorMessage = ex.Message;
-            state.IsCompleted = true;
-            state.IsAdmitted = false;
-            state.TokenChannel.Writer.TryComplete();
-        }
+
+        state.IsAdmitted = true;
+        state.AdmittedAt = DateTimeOffset.UtcNow;
+        state.PendingPrompt = null;
+        state.PromptSubmittedAt = DateTime.UtcNow;
+
+        var waited = state.EnqueuedAt is { } t
+            ? (DateTimeOffset.UtcNow - t).TotalMilliseconds
+            : 0;
+
+        _logger.LogInformation(
+            "✅ {ConnectionId} پذیرفته شد (reason={R}, waited={W:F0}ms, prefix={PC}, chunked={CH})",
+            state.ConnectionId, reason, waited, usedPrefixCache, usedChunked);
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "خطا در admission {ConnectionId}", state.ConnectionId);
+        state.ErrorMessage = ex.Message;
+        state.IsCompleted = true;
+        state.IsAdmitted = false;
+        state.TokenChannel.Writer.TryComplete();
+    }
+}
 
     // =====================================================
-    // ⬅️ [KV CACHE POLICY] مدیریت NoKvSlot با سیاست اولویت‌محور
+    // ⬅️ [KV CACHE POLICY] مدیریت NoKvSlot
     // =====================================================
 
     private bool HandleNoKvSlotWithPolicy()
@@ -758,13 +863,13 @@ public class ChatCoordinator : BackgroundService
         {
             _logger.LogWarning(
                 "⏳ NoKvSlot: هیچ قربانی مناسبی نبود. ۲۰۰ms صبر می‌کنیم.");
-            return false;   // ← هیچ slotی آزاد نشد
+            return false;
         }
 
         victim.WasEvicted = true;
         victim.EvictionReason = "kv_cache_pressure";
         victim.ErrorMessage = "پاسخ شما به دلیل فشار حافظه قطع شد.";
-        victim.IsCompleted = true;   // ⬅️ [FIX] قبل از حذف، علامت بزن تمام شده
+        victim.IsCompleted = true;
         victim.TokenChannel.Writer.TryComplete();
         RemoveConversation(victim.ConnectionId);
 
@@ -772,13 +877,59 @@ public class ChatCoordinator : BackgroundService
             "🗑️ KV Cache: قربانی {ConnectionId} حذف شد (priority={P:F2})",
             victim.ConnectionId, victim.Priority);
 
-        return true;   // ← یک slot آزاد شد
+        return true;
+    }
+
+    /// <summary>Fallback زمانی که سیاست KV غیرفعال است.</summary>
+    private bool FreeCompletedForFallback()
+    {
+        var before = _conversations.Count;
+        FreeAllCompletedSlots();
+        if (_conversations.Count < before) return true;
+
+        CleanupInactive(TimeSpan.FromMinutes(5));
+        return _conversations.Count < before;
+    }
+
+    // =====================================================
+    // ⬅️ [CHUNKED PREFILL] تغذیه‌ی قطعات
+    // =====================================================
+    private void FeedPrefillChunks()
+    {
+        var budget = _chunkedPrefillOptions.MaxChunksPerStep;
+        if (budget <= 0) return;
+
+        foreach (var state in _conversations.Values)
+        {
+            if (budget <= 0) break;
+            if (!state.IsAdmitted) continue;
+            if (!state.IsPrefilling) continue;
+            if (state.Conversation == null) continue;
+            if (state.PrefillChunks == null || state.PrefillChunks.Count == 0)
+            {
+                state.IsPrefilling = false;
+                continue;
+            }
+            if (state.Conversation.RequiresInference) continue;
+
+            var chunk = state.PrefillChunks.Dequeue();
+            state.Conversation.Prompt(chunk);
+            budget--;
+
+            if (state.PrefillChunks.Count == 0)
+            {
+                state.IsPrefilling = false;
+                state.PrefillChunks = null;
+                _logger.LogDebug(
+                    "🧩 {ConnectionId} Prefill کامل شد؛ آماده‌ی Decode.",
+                    state.ConnectionId);
+            }
+        }
     }
 
     // =====================================================
     // کمکی‌ها
     // =====================================================
-
     private void CleanupInactive(TimeSpan timeout)
     {
         var now = DateTime.UtcNow;
