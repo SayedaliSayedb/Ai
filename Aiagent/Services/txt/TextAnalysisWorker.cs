@@ -77,6 +77,13 @@ public class TextAnalysisWorker : BackgroundService
                     task.SystemPrompt,
                     stoppingToken);
 
+                // ⬅️ [SCHEDULING] اگر درخواست بلافاصله رد شده باشد
+                // (مثلاً صف پر بوده)، ErrorMessage مقدار دارد.
+                if (!string.IsNullOrEmpty(state.ErrorMessage))
+                {
+                    throw new InvalidOperationException(state.ErrorMessage);
+                }
+
                 using var timeoutCts =
                     CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 timeoutCts.CancelAfter(TaskTimeout);
@@ -94,6 +101,13 @@ public class TextAnalysisWorker : BackgroundService
                 {
                     throw new TimeoutException(
                         "پاسخ مدل در زمان مقرر (۵ دقیقه) کامل نشد.");
+                }
+
+                // ⬅️ [SCHEDULING] اگر درخواست در صف رد شده باشد
+                // (queue full / timeout)، ErrorMessage مقدار دارد.
+                if (!string.IsNullOrEmpty(state.ErrorMessage))
+                {
+                    throw new InvalidOperationException(state.ErrorMessage);
                 }
 
                 task.Result = JsonSerializer.Serialize(

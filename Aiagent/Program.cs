@@ -8,6 +8,8 @@ using LLama.Native;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
 using System.Runtime.InteropServices;
+using Aiagent.Services.Scheduling;   // ⬅️ [SCHEDULING]
+using Microsoft.Extensions.Options;  // (در صورت نیاز)
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -159,13 +161,34 @@ builder.Services.AddHostedService<MetricsPersistenceService>();
 // ----- سرویس‌های متن -----
 builder.Services.AddSingleton<ITextAnalysisQueue, MemoryTextAnalysisQueue>();
 builder.Services.AddSingleton<ITextAnalysisRepository, MemoryTextAnalysisRepository>();
-
+// ----- Scheduling (راهکار ۱: صف‌بندی آگاه از تأخیر) -----
+builder.Services.Configure<SchedulingOptions>(
+    builder.Configuration.GetSection(SchedulingOptions.SectionName));
+builder.Services.AddSingleton<SchedulingState>();
+builder.Services.AddSingleton<IRequestScheduler, LatencyAwareScheduler>();
 // ----- ChatCoordinator (با تزریق IMetricsCollector) -----
+// ----- KV Cache Policy (راهکار ۲: مدیریت اولویت‌محور) -----
+builder.Services.Configure<KvCachePolicyOptions>(
+    builder.Configuration.GetSection(KvCachePolicyOptions.SectionName));
+builder.Services.AddSingleton<KvCachePolicyState>();
+builder.Services.AddSingleton<IKvCacheEvictionPolicy, PriorityKvCachePolicy>();
+// ----- Chunked Prefill (راهکار ۴) -----
+builder.Services.Configure<ChunkedPrefillOptions>(
+    builder.Configuration.GetSection(ChunkedPrefillOptions.SectionName));
+builder.Services.AddSingleton<ChunkedPrefillState>();
 builder.Services.AddSingleton(sp =>
     new ChatCoordinator(
         sp.GetRequiredService<ILogger<ChatCoordinator>>(),
         sp.GetRequiredService<IConfiguration>(),
-        sp.GetRequiredService<IMetricsCollector>()));
+        sp.GetRequiredService<IMetricsCollector>(),
+        sp.GetRequiredService<SchedulingState>(),
+        sp.GetRequiredService<IRequestScheduler>(),
+        sp.GetRequiredService<IOptions<SchedulingOptions>>(),
+        sp.GetRequiredService<KvCachePolicyState>(),
+        sp.GetRequiredService<IKvCacheEvictionPolicy>(),
+        sp.GetRequiredService<IOptions<KvCachePolicyOptions>>(),
+        sp.GetRequiredService<ChunkedPrefillState>(),                    // ⬅️
+        sp.GetRequiredService<IOptions<ChunkedPrefillOptions>>()));      // ⬅️
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatCoordinator>());
 
 // ----- TextAnalysisWorker -----

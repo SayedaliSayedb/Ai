@@ -58,6 +58,7 @@ public class ChatHub : Hub
             }
 
             // ✅ خواندن توکن‌ها از کانال
+            // ✅ خواندن توکن‌ها از کانال
             try
             {
                 await foreach (var token in state.TokenChannel.Reader.ReadAllAsync(Context.ConnectionAborted))
@@ -67,6 +68,24 @@ public class ChatHub : Hub
                 }
             }
             catch (OperationCanceledException) { }
+
+            // ⬅️ [SCHEDULING] اگر درخواست رد شده بود، پیام خطا ارسال کن
+            if (!string.IsNullOrEmpty(state.ErrorMessage))
+            {
+                if (!Context.ConnectionAborted.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Clients.Caller.SendAsync(
+                            "ReceiveError", state.ErrorMessage, Context.ConnectionAborted);
+                    }
+                    catch { }
+                }
+
+                // پاک‌سازی state رد‌شده تا نوبت بعدی مشکل ایجاد نکند
+                _coordinator.RemoveConversation(connectionId);
+                return;
+            }
 
             if (!Context.ConnectionAborted.IsCancellationRequested)
                 await Clients.Caller.SendAsync("StreamComplete", Context.ConnectionAborted);
