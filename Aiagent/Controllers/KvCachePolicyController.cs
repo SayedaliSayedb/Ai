@@ -29,7 +29,7 @@ public class KvCachePolicyController : ControllerBase
 
         // ChatCoordinator برای دسترسی به لیست مکالمات
         // (چون Singleton است، این OK است)
-        var coordinator = sp.GetRequiredService<Services.ChatCoordinator>();
+        var coordinator = sp.GetRequiredService<Services.ChatCoordinator1>();
         _conversationsProvider = () => coordinator.GetAllConversations();
     }
 

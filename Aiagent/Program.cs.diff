@@ -1,0 +1,64 @@
+--- a/Program.cs
++++ b/Program.cs
+@@ -1,10 +1,11 @@
+-﻿using Aiagent.Hubs;
++using Aiagent.Hubs;
+ using Aiagent.Middleware;
+ using Aiagent.Services;
+ using Aiagent.Services.Auth;
+ using Aiagent.Services.LoadTesting;
+ using Aiagent.Services.Metrics;
+ using Aiagent.Services.Scheduling;   // ⬅️ [SCHEDULING]
++using Aiagent.Services.Adaptive;
+ using Aiagent.Services.Storage;
+ using LLama.Native;
+ using Microsoft.AspNetCore.Http.Features;
+@@ -167,6 +168,15 @@
+     builder.Configuration.GetSection(SchedulingOptions.SectionName));
+ builder.Services.AddSingleton<SchedulingState>();
+ builder.Services.AddSingleton<IRequestScheduler, LatencyAwareScheduler>();
++// ----- Adaptive application-layer controller -----
++builder.Services.AddOptions<AdaptiveControllerOptions>()
++    .Bind(builder.Configuration.GetSection(AdaptiveControllerOptions.SectionName))
++    .Validate(options => options.IsValid(out _), "AdaptiveController configuration is invalid.")
++    .ValidateOnStart();
++builder.Services.AddSingleton<AdaptiveControllerState>();
++builder.Services.AddSingleton<AdaptiveTelemetryStore>();
++builder.Services.AddSingleton<IGpuTelemetryProvider, NvidiaSmiGpuTelemetryProvider>();
++
+ // ----- ChatCoordinator (با تزریق IMetricsCollector) -----
+ // ----- KV Cache Policy (راهکار ۲: مدیریت اولویت‌محور) -----
+ builder.Services.Configure<KvCachePolicyOptions>(
+@@ -199,8 +209,11 @@
+         sp.GetRequiredService<IOptions<ChunkedPrefillOptions>>(),
+         sp.GetRequiredService<PrefixSharingState>(),             
+         sp.GetRequiredService<IOptions<PrefixSharingOptions>>(),  
+-        sp.GetRequiredService<PrefixCache>()));                    
++        sp.GetRequiredService<PrefixCache>(),
++        sp.GetRequiredService<AdaptiveTelemetryStore>(),
++        sp.GetRequiredService<AdaptiveControllerState>()));                    
+ builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatCoordinator>());
++builder.Services.AddHostedService<AdaptiveControllerService>();
+ 
+ // ----- TextAnalysisWorker -----
+ builder.Services.AddHostedService<TextAnalysisWorker>();
+@@ -241,6 +254,7 @@
+ // ============================================================
+ app.MapHub<MetricsHub>("/metricsHub");
+ app.MapHub<ChatHub>("/chatHub");
++app.MapControllers();
+ 
+ app.MapControllerRoute(
+     name: "default",
+@@ -257,6 +271,11 @@
+ };
+ 
+ var coordinator = app.Services.GetRequiredService<ChatCoordinator>();
++var adaptiveTelemetry = app.Services.GetRequiredService<AdaptiveTelemetryStore>();
++adaptiveTelemetry.SetRuntimeProviders(
++    () => coordinator.GetActiveSequenceCount(),
++    () => coordinator.GetQueuedCount(),
++    () => coordinator.GetMaxSequences());
+ collector.ActiveConversationsProvider = () => coordinator.GetActiveConversationCount();
+ collector.ActiveSequencesProvider = () => coordinator.GetActiveSequenceCount();
+ collector.MaxSequencesProvider = () => coordinator.GetMaxSequences();

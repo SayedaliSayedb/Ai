@@ -19,13 +19,13 @@ public class TextAnalysisWorker : BackgroundService
     private readonly ITextAnalysisQueue _queue;
     private readonly ITextAnalysisRepository _repository;
     private readonly ILogger<TextAnalysisWorker> _logger;
-    private readonly ChatCoordinator _coordinator;
+    private readonly ChatCoordinator1 _coordinator;
 
     public TextAnalysisWorker(
         ITextAnalysisQueue queue,
         ITextAnalysisRepository repository,
         ILogger<TextAnalysisWorker> logger,
-        ChatCoordinator coordinator)
+        ChatCoordinator1 coordinator)
     {
         _queue = queue;
         _repository = repository;

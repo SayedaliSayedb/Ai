@@ -1,6 +1,7 @@
-﻿using Aiagent.Models;
+using Aiagent.Models;
 using Aiagent.Services.Metrics;
 using Aiagent.Services.Scheduling;
+using Aiagent.Services.Adaptive;
 using LLama;
 using LLama.Batched;
 using LLama.Common;
@@ -42,6 +43,8 @@ public class ChatCoordinator : BackgroundService
     private readonly PrefixSharingState _prefixSharingState;
     private readonly PrefixSharingOptions _prefixSharingOptions;
     private readonly PrefixCache _prefixCache;
+    private readonly AdaptiveTelemetryStore _adaptiveTelemetry;
+    private readonly AdaptiveControllerState _adaptiveControllerState;
 
     private int MaxTokensPerResponse { get; }
     private uint SeqMax { get; }
@@ -66,7 +69,9 @@ public class ChatCoordinator : BackgroundService
         IOptions<ChunkedPrefillOptions> chunkedPrefillOptions,
         PrefixSharingState prefixSharingState,
         IOptions<PrefixSharingOptions> prefixSharingOptions,
-        PrefixCache prefixCache)
+        PrefixCache prefixCache,
+        AdaptiveTelemetryStore adaptiveTelemetry,
+        AdaptiveControllerState adaptiveControllerState)
     {
         _logger = logger;
         _metrics = metrics;
@@ -85,6 +90,8 @@ public class ChatCoordinator : BackgroundService
         _prefixSharingState = prefixSharingState;
         _prefixSharingOptions = prefixSharingOptions.Value;
         _prefixCache = prefixCache;
+        _adaptiveTelemetry = adaptiveTelemetry;
+        _adaptiveControllerState = adaptiveControllerState;
 
         var llm = config.GetSection("Llm");
         var modelPath = llm["ModelPath"] ?? "models/gemma-3-4b-it-Q4_K_M.gguf";
@@ -92,6 +99,10 @@ public class ChatCoordinator : BackgroundService
         var gpuLayerCount = llm.GetValue("GpuLayerCount", 99);
         var contextSize = llm.GetValue("ContextSize", 4096u);
         SeqMax = llm.GetValue("SeqMax", 8u);
+        var schedulerHardLimit = _schedulingOptions.MaxActiveConversations > 0
+            ? Math.Min(_schedulingOptions.MaxActiveConversations, (int)SeqMax)
+            : (int)SeqMax;
+        _adaptiveControllerState.ConfigureRuntimeMaximum(schedulerHardLimit);
         var batchSize = llm.GetValue("BatchSize", 512u);
         var uBatchSize = llm.GetValue("UBatchSize", 512u);
         var flashAttention = llm.GetValue("FlashAttention", true);
@@ -217,7 +228,9 @@ public class ChatCoordinator : BackgroundService
                 RawUserMessage = userMessage
             };
 
-            if (_schedulingState.Enabled)
+            _adaptiveTelemetry.RecordArrival(connectionId, RequestCost.ApproximateTokens(formatted));
+
+            if (_schedulingState.Enabled || _adaptiveControllerState.IsActuating)
             {
                 newState.PendingPrompt = formatted;
                 newState.IsAdmitted = false;
@@ -238,6 +251,7 @@ public class ChatCoordinator : BackgroundService
                 newState.Conversation = conv;
                 newState.IsAdmitted = true;
                 newState.AdmittedAt = DateTimeOffset.UtcNow;
+                _adaptiveTelemetry.RecordAdmitted(connectionId, newState.AdmittedAt, GetEffectiveAdmissionTarget());
 
                 _conversations.TryAdd(connectionId, newState);
                 _logger.LogInformation("مکالمه جدید برای {ConnectionId} ایجاد شد.", connectionId);
@@ -293,8 +307,9 @@ public class ChatCoordinator : BackgroundService
                 _schedulingOptions);
 
             state.Cost = cost;
+            _adaptiveTelemetry.RecordArrival(connectionId, RequestCost.ApproximateTokens(formatted));
 
-            if (_schedulingState.Enabled)
+            if (_schedulingState.Enabled || _adaptiveControllerState.IsActuating)
             {
                 state.PendingPrompt = formatted;
                 state.IsAdmitted = false;
@@ -310,6 +325,7 @@ public class ChatCoordinator : BackgroundService
                 state.Conversation!.Prompt(formatted);
                 state.IsAdmitted = true;
                 state.AdmittedAt = DateTimeOffset.UtcNow;
+                _adaptiveTelemetry.RecordAdmitted(connectionId, state.AdmittedAt, GetEffectiveAdmissionTarget());
                 _logger.LogInformation(
                     "پیام بعدی برای {ConnectionId} ثبت شد (turn={Turn}).",
                     connectionId, state.TurnCount);
@@ -325,6 +341,7 @@ public class ChatCoordinator : BackgroundService
     {
         if (_conversations.TryRemove(connectionId, out var state))
         {
+            _adaptiveTelemetry.ForgetPending(connectionId);
             _scheduler.Remove(connectionId);
             try { state.TokenChannel.Writer.TryComplete(); } catch { }
             try { state.Conversation?.Dispose(); } catch { }
@@ -464,7 +481,7 @@ public class ChatCoordinator : BackgroundService
                 try
                 {
                     // مرحله ۰: مدیریت صف
-                    if (_schedulingState.Enabled)
+                    if (_schedulingState.Enabled || _adaptiveControllerState.IsActuating)
                         ProcessPendingAdmissions();
                     else if (_scheduler.PendingCount > 0)
                         FlushPendingAdmissions();
@@ -553,6 +570,7 @@ public class ChatCoordinator : BackgroundService
 
                         if (isEog || isLimit)
                         {
+                            RecordAdaptiveCompletion(state);
                             state.IsCompleted = true;
                             state.IsWaitingForPrompt = true;
                             state.TokenChannel.Writer.TryComplete();
@@ -633,9 +651,12 @@ public class ChatCoordinator : BackgroundService
         var activeCount = _conversations.Values.Count(
             c => c.IsAdmitted && c.Conversation != null);
 
-        var maxActive = _schedulingOptions.MaxActiveConversations > 0
-            ? _schedulingOptions.MaxActiveConversations
+        var configuredMaxActive = _schedulingOptions.MaxActiveConversations > 0
+            ? Math.Min(_schedulingOptions.MaxActiveConversations, (int)SeqMax)
             : (int)SeqMax;
+        var maxActive = _adaptiveControllerState.IsActuating
+            ? Math.Min(configuredMaxActive, _adaptiveControllerState.TargetConcurrency)
+            : configuredMaxActive;
 
         var availableSlots = maxActive - activeCount;
         if (availableSlots <= 0) return;
@@ -827,6 +848,7 @@ public class ChatCoordinator : BackgroundService
 
         state.IsAdmitted = true;
         state.AdmittedAt = DateTimeOffset.UtcNow;
+        _adaptiveTelemetry.RecordAdmitted(state.ConnectionId, state.AdmittedAt, GetEffectiveAdmissionTarget());
         state.PendingPrompt = null;
         state.PromptSubmittedAt = DateTime.UtcNow;
 
@@ -841,6 +863,7 @@ public class ChatCoordinator : BackgroundService
     catch (Exception ex)
     {
         _logger.LogError(ex, "خطا در admission {ConnectionId}", state.ConnectionId);
+        _adaptiveTelemetry.RecordFailure(state.ConnectionId);
         state.ErrorMessage = ex.Message;
         state.IsCompleted = true;
         state.IsAdmitted = false;
@@ -866,6 +889,7 @@ public class ChatCoordinator : BackgroundService
             return false;
         }
 
+        _adaptiveTelemetry.RecordFailure(victim.ConnectionId);
         victim.WasEvicted = true;
         victim.EvictionReason = "kv_cache_pressure";
         victim.ErrorMessage = "پاسخ شما به دلیل فشار حافظه قطع شد.";
@@ -930,6 +954,36 @@ public class ChatCoordinator : BackgroundService
     // =====================================================
     // کمکی‌ها
     // =====================================================
+    private int GetEffectiveAdmissionTarget()
+    {
+        var configuredMax = _schedulingOptions.MaxActiveConversations > 0
+            ? Math.Min(_schedulingOptions.MaxActiveConversations, (int)SeqMax)
+            : (int)SeqMax;
+        return _adaptiveControllerState.IsActuating
+            ? Math.Min(configuredMax, _adaptiveControllerState.TargetConcurrency)
+            : configuredMax;
+    }
+
+    private void RecordAdaptiveCompletion(ConversationState state)
+    {
+        try
+        {
+            _adaptiveTelemetry.RecordCompletion(
+                state.ConnectionId,
+                state.FirstTokenAt,
+                state.LastTokenAt,
+                state.GeneratedTokens,
+                GetActiveSequenceCount(),
+                GetQueuedCount(),
+                GetEffectiveAdmissionTarget());
+        }
+        catch (Exception ex)
+        {
+            // Adaptive telemetry must never interrupt inference or token delivery.
+            _logger.LogDebug(ex, "ثبت متریک کنترل‌گر تطبیقی برای {ConnectionId} ناموفق بود.", state.ConnectionId);
+        }
+    }
+
     private void CleanupInactive(TimeSpan timeout)
     {
         var now = DateTime.UtcNow;

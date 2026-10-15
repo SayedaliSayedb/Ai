@@ -363,3 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 /Aiagent/Models/gemma-3-4b-it-Q4_K_M.gguf
 /Aiagent/Models/resnet50-v2-7.onnx
+*.gguf
