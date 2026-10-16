@@ -1,4 +1,4 @@
-﻿using Aiagent.Models;
+using Aiagent.Models;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System;
@@ -19,13 +19,13 @@ public class TextAnalysisWorker : BackgroundService
     private readonly ITextAnalysisQueue _queue;
     private readonly ITextAnalysisRepository _repository;
     private readonly ILogger<TextAnalysisWorker> _logger;
-    private readonly ChatCoordinator1 _coordinator;
+    private readonly ChatCoordinator _coordinator;
 
     public TextAnalysisWorker(
         ITextAnalysisQueue queue,
         ITextAnalysisRepository repository,
         ILogger<TextAnalysisWorker> logger,
-        ChatCoordinator1 coordinator)
+        ChatCoordinator coordinator)
     {
         _queue = queue;
         _repository = repository;

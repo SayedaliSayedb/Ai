@@ -1,4 +1,4 @@
-﻿using Aiagent.Models;
+using Aiagent.Models;
 using Aiagent.Services.Scheduling;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -29,7 +29,7 @@ public class KvCachePolicyController : ControllerBase
 
         // ChatCoordinator برای دسترسی به لیست مکالمات
         // (چون Singleton است، این OK است)
-        var coordinator = sp.GetRequiredService<Services.ChatCoordinator1>();
+        var coordinator = sp.GetRequiredService<Services.ChatCoordinator>();
         _conversationsProvider = () => coordinator.GetAllConversations();
     }
 

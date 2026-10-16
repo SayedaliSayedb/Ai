@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using Aiagent.Models;
 
 namespace Aiagent.Services.Metrics;
@@ -21,7 +21,7 @@ public class MetricsCollector : IMetricsCollector, IDisposable
 
     private readonly ConcurrentQueue<double> _ttft = new();
     private readonly ConcurrentQueue<double> _tpot = new();
-    private readonly ConcurrentQueue<long> _tokensPerSecWindow = new();
+    private readonly ConcurrentQueue<(long TimestampMs, int Count)> _tokensPerSecWindow = new();
     private readonly ConcurrentQueue<long> _batchesPerSecWindow = new();
 
     private int _noKvSlotCount;
@@ -64,8 +64,11 @@ public class MetricsCollector : IMetricsCollector, IDisposable
 
     public void RecordTokens(int count)
     {
+        if (count <= 0)
+            return;
+
         Interlocked.Add(ref _totalTokens, count);
-        _tokensPerSecWindow.Enqueue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _tokensPerSecWindow.Enqueue((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), count));
     }
 
     public void RecordNoKvSlot() => Interlocked.Increment(ref _noKvSlotCount);
@@ -107,14 +110,24 @@ public class MetricsCollector : IMetricsCollector, IDisposable
 
         // محاسبه‌ی نرخ توکن و بچ در ۵ ثانیه‌ی اخیر
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        sample.TokensPerSecond = _tokensPerSecWindow.Count(t => now - t < 5000) / 5.0;
-        sample.BatchesPerSecond = _batchesPerSecWindow.Count(t => now - t < 5000) / 5.0;
+        // شمارش تعداد واقعی توکن‌های ثبت‌شده در پنجره، نه تعداد رویدادهای ثبت.
+        // پنجره‌ی ۵ ثانیه‌ای باعث کاهش نوسان نرخ نمایش داده‌شده می‌شود.
+        var tokenEvents = _tokensPerSecWindow.ToArray();
+        var tokensInWindow = tokenEvents
+            .Where(e => now - e.TimestampMs < 5000)
+            .Sum(e => (long)e.Count);
+        var elapsedWindowSeconds = Math.Clamp(
+            (DateTimeOffset.UtcNow - _startTime).TotalSeconds, 0.1, 5.0);
+        sample.TokensPerSecond = tokensInWindow / elapsedWindowSeconds;
 
-        // حذف موارد قدیمی از پنجره
-        while (_tokensPerSecWindow.TryPeek(out var t) && now - t > 10000) _tokensPerSecWindow.TryDequeue(out _);
-        while (_batchesPerSecWindow.TryPeek(out var t) && now - t > 10000) _batchesPerSecWindow.TryDequeue(out _);
+        sample.BatchesPerSecond =
+            _batchesPerSecWindow.Count(t => now - t < 5000) / elapsedWindowSeconds;
 
-        // بررسی SLO
+        // حذف رویدادهای قدیمی از پنجره
+        while (_tokensPerSecWindow.TryPeek(out var tokenEvent) && now - tokenEvent.TimestampMs > 10000)
+            _tokensPerSecWindow.TryDequeue(out _);
+        while (_batchesPerSecWindow.TryPeek(out var batchTimestamp) && now - batchTimestamp > 10000)
+            _batchesPerSecWindow.TryDequeue(out _);
         sample.SloViolated = sample.TtftP95 > 2000 || sample.TpotP95 > 500;
 
         return sample;

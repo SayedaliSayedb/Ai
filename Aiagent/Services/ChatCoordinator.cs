@@ -582,6 +582,10 @@ public class ChatCoordinator : BackgroundService
                             continue;
                         }
 
+                        // این نقطه یک توکن واقعی از موتور استنتاج است؛ شمارش را از
+                        // تولید توکن انجام می‌دهیم، نه از تعداد قطعه‌های متنی/SignalR.
+                        _metrics.RecordTokens(1);
+
                         if (!_decoders.TryGetValue(connectionId, out var decoder))
                         {
                             decoder = new StreamingTokenDecoder(_executor.Context)
@@ -597,7 +601,6 @@ public class ChatCoordinator : BackgroundService
                         if (!string.IsNullOrEmpty(text))
                         {
                             state.TokenChannel.Writer.TryWrite(text);
-                            _metrics.RecordTokens(1);
                         }
 
                         didWork = true;

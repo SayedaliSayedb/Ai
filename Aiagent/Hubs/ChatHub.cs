@@ -1,4 +1,4 @@
-﻿using Aiagent.Models;
+using Aiagent.Models;
 using Aiagent.Services;
 using Microsoft.AspNetCore.SignalR;
 using System.Collections.Concurrent;
@@ -7,11 +7,11 @@ namespace Aiagent.Hubs;
 
 public class ChatHub : Hub
 {
-    private readonly ChatCoordinator1 _coordinator;
+    private readonly ChatCoordinator _coordinator;
     private readonly ILogger<ChatHub> _logger;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConnectionLocks = new();
 
-    public ChatHub(ChatCoordinator1 coordinator, ILogger<ChatHub> logger)
+    public ChatHub(ChatCoordinator coordinator, ILogger<ChatHub> logger)
     {
         _coordinator = coordinator;
         _logger = logger;
